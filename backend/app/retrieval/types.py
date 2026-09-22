@@ -144,7 +144,13 @@ class RetrievalRequest:
     profile: RetrievalProfile = DEFAULT_PROFILE
     sub_queries: tuple[str, ...] = ()
     exact_tokens: tuple[str, ...] = ()
+    #: The embedded query. None disables the dense leg, which is how the fast path and the
+    #: bm25-only ablation row are expressed without a separate code path.
+    embedding: tuple[float, ...] | None = None
     top_k: int = 50
+    #: Legs to run. None means "every leg that reports itself enabled"; an explicit set is what
+    #: the ablation runner uses to produce one row per configuration.
+    legs: frozenset[str] | None = None
 
 
 @dataclass(slots=True)
@@ -153,6 +159,9 @@ class LegDiagnostics:
     hits: int
     took_ms: float
     size: int
+    #: Set when the leg came back with an error. A failed leg degrades recall and is recorded
+    #: here rather than raised, so the retrieval debugger shows it instead of it being invisible.
+    error: str | None = None
 
 
 @dataclass(slots=True)

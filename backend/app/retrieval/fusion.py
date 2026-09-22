@@ -50,20 +50,34 @@ def fuse_rrf(
         weight = 1.0 if weights is None else weights.get(leg_name, 1.0)
         if weight == 0.0:
             continue
+
+        # What THIS fusion has already counted for this leg. Deliberately not read from
+        # ``candidate.legs``: a candidate may arrive with that entry already populated -- the
+        # parent leg sets it while projecting sections down to children -- and treating a
+        # pre-existing entry as "already counted" would skip the contribution entirely and leave
+        # the chunk fused at zero. The guard is about double-counting within this pass, nothing else.
+        counted: dict[str, int] = {}
+
         for zero_based, candidate in enumerate(candidates):
             rank = zero_based + 1
+            incoming = candidate.legs.get(leg_name)
+            leg_score = incoming.score if incoming is not None else 0.0
+
             existing = merged.get(candidate.chunk_id)
             if existing is None:
                 merged[candidate.chunk_id] = candidate
                 existing = candidate
                 scores[candidate.chunk_id] = 0.0
-            # A leg must not contribute twice for the same chunk; keep the better (lower) rank.
-            prior = existing.legs.get(leg_name)
-            if prior is not None and prior.rank <= rank:
+
+            # The same chunk listed twice by one leg keeps its better (lower) rank.
+            prior_rank = counted.get(candidate.chunk_id)
+            if prior_rank is not None and prior_rank <= rank:
                 continue
-            if prior is not None:
-                scores[candidate.chunk_id] -= weight / (k + prior.rank)
-            existing.legs[leg_name] = LegHit(rank=rank, score=candidate.legs.get(leg_name, LegHit(rank, 0.0)).score)
+            if prior_rank is not None:
+                scores[candidate.chunk_id] -= weight / (k + prior_rank)
+
+            counted[candidate.chunk_id] = rank
+            existing.legs[leg_name] = LegHit(rank=rank, score=leg_score)
             scores[candidate.chunk_id] += weight / (k + rank)
 
     for chunk_id, candidate in merged.items():

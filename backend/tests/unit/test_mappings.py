@@ -114,6 +114,11 @@ def test_body_similarity_lowers_b_for_length_normalised_chunks() -> None:
     assert settings["similarity"]["bm25_body"]["b"] == 0.4
 
 
+def test_parent_mapping_keeps_the_key_the_parent_leg_projects_through() -> None:
+    """parent_id links a section to its children; without it the parent leg cannot work."""
+    assert "parent_id" in parent_mapping()["properties"]
+
+
 def test_parent_index_has_no_vector() -> None:
     props = parent_mapping()["properties"]
     assert "embedding" not in props

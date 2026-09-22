@@ -196,7 +196,10 @@ def parent_mapping() -> dict[str, Any]:
     """
     mapping = chunk_mapping(dimension=1)
     properties: dict[str, Any] = dict(mapping["properties"])
-    for field in ("embedding", "parent_id", "ordinal", "chunk_id", "context_line", "simhash64"):
+    # parent_id STAYS: it is the key the parent leg projects through to reach a section's
+    # children. Dropping it makes the parent leg silently unable to link anything, which under
+    # dynamic: strict shows up as a bulk rejection rather than as a leg that returns nothing.
+    for field in ("embedding", "ordinal", "chunk_id", "context_line", "simhash64", "content_sha256"):
         properties.pop(field, None)
     properties["parent_ordinal"] = {"type": "integer"}
     properties["child_count"] = {"type": "integer"}

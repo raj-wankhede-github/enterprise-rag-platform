@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.retrieval.fusion import fuse_rrf, leg_contribution
-from app.retrieval.types import Candidate
+from app.retrieval.types import Candidate, LegHit
 
 
 def make(chunk_id: str) -> Candidate:
@@ -87,3 +87,26 @@ def test_leg_contribution_counts_unique_finds() -> None:
         }
     )
     assert contribution == {"bm25": 1, "dense": 1}
+
+
+def test_a_candidate_arriving_with_its_leg_already_set_still_scores() -> None:
+    """Regression: the parent leg pre-populates legs["parent"] while projecting sections.
+
+    An earlier version treated any pre-existing entry as "already counted" and skipped the
+    contribution, so every parent-only candidate fused to exactly zero -- invisible in unit tests
+    that build candidates from scratch, and caught only by running the real retriever.
+    """
+    pre_set = make("from_parent")
+    pre_set.legs["parent"] = LegHit(rank=1, score=3.5)
+
+    fused = fuse_rrf({"parent": [pre_set]}, k=60)
+    assert fused[0].fused_score == pytest.approx(1 / 61)
+    # The engine score survives for the retrieval debugger.
+    assert fused[0].legs["parent"].score == 3.5
+
+
+def test_pre_set_leg_entries_do_not_suppress_other_legs() -> None:
+    shared = make("shared")
+    shared.legs["parent"] = LegHit(rank=2, score=1.0)
+    fused = fuse_rrf({"bm25": [make("shared")], "parent": [shared]}, k=60)
+    assert fused[0].fused_score == pytest.approx(1 / 61 + 1 / 61)

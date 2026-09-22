@@ -84,4 +84,5 @@ filterwarnings = [
     "error::DeprecationWarning",
     "ignore:.*BlockingPortal alias is deprecated.*:DeprecationWarning",
     "ignore:.*Using `httpx` with `starlette.testclient` is deprecated.*",
+    "ignore:.*enable_cleanup_closed ignored.*:DeprecationWarning",
 ]
