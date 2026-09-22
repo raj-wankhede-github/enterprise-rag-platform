@@ -130,9 +130,7 @@ def a_policy(**kwargs: Any) -> TenantLoginPolicy:
 
 
 def test_discovery_returns_a_tenants_methods(client: TestClient, service: FakeAuthService) -> None:
-    service.policy = a_policy(
-        idps=(IdpSummary(id=CONFIG, kind=IdpKind.ENTRA, display_name="", state=IdpState.ACTIVE),)
-    )
+    service.policy = a_policy(idps=(IdpSummary(id=CONFIG, kind=IdpKind.ENTRA, display_name="", state=IdpState.ACTIVE),))
     body = client.post("/api/auth/discover", json={"email": "a@acme.com"}).json()
 
     assert body["tenant_slug"] == "acme"
@@ -275,9 +273,7 @@ def test_a_refresh_without_a_cookie_is_an_ended_session_not_a_crash(client: Test
     assert client.post("/api/auth/refresh").status_code == 401
 
 
-def test_a_replayed_refresh_token_signs_the_user_out_everywhere(
-    client: TestClient, service: FakeAuthService
-) -> None:
+def test_a_replayed_refresh_token_signs_the_user_out_everywhere(client: TestClient, service: FakeAuthService) -> None:
     """The user-visible half of family revocation. Being told why matters: an unexplained
     sign-out is a support ticket, and this one is worth their attention."""
     client.cookies.set(refresh_cookie_name(secure=True), "stale-token")
@@ -296,9 +292,10 @@ def test_a_failed_refresh_clears_the_cookies_rather_than_leaving_a_dead_session(
 
     response = client.post("/api/auth/refresh")
     assert response.status_code == 401
-    assert 'Max-Age=0' in response.headers.get("set-cookie", "") or "expires=" in response.headers.get(
-        "set-cookie", ""
-    ).lower()
+    assert (
+        "Max-Age=0" in response.headers.get("set-cookie", "")
+        or "expires=" in response.headers.get("set-cookie", "").lower()
+    )
 
 
 def test_a_valid_refresh_issues_a_new_pair(client: TestClient) -> None:
@@ -369,9 +366,7 @@ def test_a_provider_that_refused_is_reported_without_a_code_exchange(client: Tes
 
 
 def test_a_forged_state_is_refused(client: TestClient) -> None:
-    response = client.get(
-        "/api/auth/oidc/callback?code=abc&state=not-a-signed-state", follow_redirects=False
-    )
+    response = client.get("/api/auth/oidc/callback?code=abc&state=not-a-signed-state", follow_redirects=False)
     assert "expired" in response.headers["location"]
 
 

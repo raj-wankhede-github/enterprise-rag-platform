@@ -202,9 +202,7 @@ def test_a_preprovisioned_account_is_linked_by_verified_email_once() -> None:
 
 def test_an_unverified_address_cannot_link_an_existing_account() -> None:
     """Otherwise anyone who can make their IdP assert a string takes over that account."""
-    decision = plan_login(
-        claims(email_verified=False), ProvisioningPolicy(), linked=None, by_email=a_user()
-    )
+    decision = plan_login(claims(email_verified=False), ProvisioningPolicy(), linked=None, by_email=a_user())
     assert not decision.permitted
 
 

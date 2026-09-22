@@ -276,3 +276,36 @@ Four decisions worth keeping:
 ESLint enforces two of these structurally: `dangerouslySetInnerHTML` is banned outright (a remote
 image in a retrieved passage is the classic exfiltration channel) and `localStorage` /
 `sessionStorage` are banned in production code, since the session lives in HttpOnly cookies.
+
+
+## Step 15: keys, limits and concurrency
+
+Three bugs the tests found, all of which would have shipped:
+
+* **The API key secret used `token_urlsafe`, whose alphabet contains the `_` we use as the field
+  separator.** The regex parser survived it; `token.split("_")` — which is what every other
+  consumer does, including a log scrubber and a customer's own client — returned a truncated
+  secret. The alphabet is now base62.
+* **`redact()` used the anchored pattern**, so scrubbing a key out of a log line silently did
+  nothing while reporting success. That is the worst possible failure for a redaction function.
+* **`enforce()` charged the per-user budget before the per-tenant scope refused.** Under a
+  tenant-level throttle every user also drained their own allowance doing nothing, so when the
+  tenant limit cleared they stayed individually throttled — an outage that outlasts its cause
+  with no obvious explanation. It is now check-all-then-record-all.
+
+Two controls, not one. A rate limit bounds requests per window and does nothing about fifty
+concurrent `ask` requests: each is inside a 300/minute budget, each holds an LLM call open, and
+the service degrades while the limiter reports that nothing is wrong. `ConcurrencyLimiter` bounds
+in-flight work, which is what actually protects the slow resources.
+
+Two scopes, not one. Per-user alone does not stop a tenant's 200 users saturating shared
+infrastructure; per-tenant alone lets one user consume the whole allowance.
+
+Keys can never hold `sso:configure`, `user:manage`, `audit:view`, `apikey:manage_any` or
+`export:documents` — the capabilities that turn a leaked CI credential into a tenant takeover.
+Applied when the principal is built, not when the key is created, so a key minted before the rule
+existed is narrowed the next time it is used.
+
+**Not verified:** "limits hold across two replicas" needs Redis and two API containers. The Lua
+script is tested against a fake, and the in-memory limiter is explicitly documented as wrong
+across replicas, which is why the production settings validator requires a Redis URL.

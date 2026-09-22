@@ -118,8 +118,12 @@ def test_the_verifier_is_never_sent_in_the_authorization_request() -> None:
     """``plain`` puts the verifier in the request, which defeats the entire point: anyone who
     intercepts the request can complete the exchange."""
     request = build_authorization_request(
-        METADATA, client_id="c", redirect_uri="https://app/cb", idp_config_id=CONFIG_ID,
-        tenant_id=TENANT, state_secret=SECRET,
+        METADATA,
+        client_id="c",
+        redirect_uri="https://app/cb",
+        idp_config_id=CONFIG_ID,
+        tenant_id=TENANT,
+        state_secret=SECRET,
     )
     assert "code_challenge_method=S256" in request.url
     assert request.verifier not in request.url
@@ -213,8 +217,13 @@ def test_a_same_origin_path_survives(candidate: str) -> None:
 
 def test_the_authorization_request_sanitises_the_next_path_before_signing_it() -> None:
     request = build_authorization_request(
-        METADATA, client_id="c", redirect_uri="https://app/cb", idp_config_id=CONFIG_ID,
-        tenant_id=TENANT, state_secret=SECRET, next_path="https://attacker.example.com",
+        METADATA,
+        client_id="c",
+        redirect_uri="https://app/cb",
+        idp_config_id=CONFIG_ID,
+        tenant_id=TENANT,
+        state_secret=SECRET,
+        next_path="https://attacker.example.com",
     )
     assert decode_state(request.state, SECRET).next_path == "/"
 
@@ -226,8 +235,12 @@ def test_the_authorization_request_sanitises_the_next_path_before_signing_it() -
 
 def test_the_request_is_a_code_flow_with_a_nonce() -> None:
     request = build_authorization_request(
-        METADATA, client_id="client-id", redirect_uri="https://app/cb", idp_config_id=CONFIG_ID,
-        tenant_id=TENANT, state_secret=SECRET,
+        METADATA,
+        client_id="client-id",
+        redirect_uri="https://app/cb",
+        idp_config_id=CONFIG_ID,
+        tenant_id=TENANT,
+        state_secret=SECRET,
     )
     assert "response_type=code" in request.url
     assert f"nonce={request.nonce}" in request.url
@@ -238,8 +251,13 @@ def test_openid_is_always_requested_even_if_a_tenant_configured_odd_scopes() -> 
     """Without it the provider returns no ID token at all, and the failure arrives at the
     callback rather than at configuration time."""
     request = build_authorization_request(
-        METADATA, client_id="c", redirect_uri="https://app/cb", idp_config_id=CONFIG_ID,
-        tenant_id=TENANT, state_secret=SECRET, scopes=("email",),
+        METADATA,
+        client_id="c",
+        redirect_uri="https://app/cb",
+        idp_config_id=CONFIG_ID,
+        tenant_id=TENANT,
+        state_secret=SECRET,
+        scopes=("email",),
     )
     assert "scope=openid+email" in request.url
 
@@ -248,16 +266,24 @@ def test_a_login_hint_skips_the_account_picker() -> None:
     """Removes the commonest support complaint about SSO: "it signed me in as the wrong
     account"."""
     request = build_authorization_request(
-        METADATA, client_id="c", redirect_uri="https://app/cb", idp_config_id=CONFIG_ID,
-        tenant_id=TENANT, state_secret=SECRET, login_hint="a@acme.com",
+        METADATA,
+        client_id="c",
+        redirect_uri="https://app/cb",
+        idp_config_id=CONFIG_ID,
+        tenant_id=TENANT,
+        state_secret=SECRET,
+        login_hint="a@acme.com",
     )
     assert "login_hint=a%40acme.com" in request.url
 
 
 def test_each_request_has_a_fresh_nonce_and_verifier() -> None:
     args = dict(
-        client_id="c", redirect_uri="https://app/cb", idp_config_id=CONFIG_ID,
-        tenant_id=TENANT, state_secret=SECRET,
+        client_id="c",
+        redirect_uri="https://app/cb",
+        idp_config_id=CONFIG_ID,
+        tenant_id=TENANT,
+        state_secret=SECRET,
     )
     first = build_authorization_request(METADATA, **args)  # type: ignore[arg-type]
     second = build_authorization_request(METADATA, **args)  # type: ignore[arg-type]
@@ -267,8 +293,13 @@ def test_each_request_has_a_fresh_nonce_and_verifier() -> None:
 
 def test_test_mode_survives_the_round_trip_so_the_callback_provisions_nobody() -> None:
     request = build_authorization_request(
-        METADATA, client_id="c", redirect_uri="https://app/cb", idp_config_id=CONFIG_ID,
-        tenant_id=TENANT, state_secret=SECRET, test_mode=True,
+        METADATA,
+        client_id="c",
+        redirect_uri="https://app/cb",
+        idp_config_id=CONFIG_ID,
+        tenant_id=TENANT,
+        state_secret=SECRET,
+        test_mode=True,
     )
     assert decode_state(request.state, SECRET).test_mode
 
@@ -287,8 +318,13 @@ async def test_the_verifier_is_sent_to_the_token_endpoint_not_to_the_browser() -
 
     async with transport(handler) as client:
         result = await exchange_code(
-            METADATA, code="the-code", client_id="c", client_secret="s",
-            redirect_uri="https://app/cb", verifier="the-verifier", client=client,
+            METADATA,
+            code="the-code",
+            client_id="c",
+            client_secret="s",
+            redirect_uri="https://app/cb",
+            verifier="the-verifier",
+            client=client,
         )
     assert sent["code_verifier"] == "the-verifier"
     assert sent["grant_type"] == "authorization_code"
@@ -305,8 +341,13 @@ async def test_a_rejected_exchange_surfaces_the_providers_own_reason() -> None:
     async with transport(handler) as client:
         with pytest.raises(OidcError, match="secret expired"):
             await exchange_code(
-                METADATA, code="c", client_id="c", client_secret="s",
-                redirect_uri="https://app/cb", verifier="v", client=client,
+                METADATA,
+                code="c",
+                client_id="c",
+                client_secret="s",
+                redirect_uri="https://app/cb",
+                verifier="v",
+                client=client,
             )
 
 
@@ -317,8 +358,13 @@ async def test_a_response_without_an_id_token_points_at_the_scope() -> None:
     async with transport(handler) as client:
         with pytest.raises(OidcError, match="openid"):
             await exchange_code(
-                METADATA, code="c", client_id="c", client_secret=None,
-                redirect_uri="https://app/cb", verifier="v", client=client,
+                METADATA,
+                code="c",
+                client_id="c",
+                client_secret=None,
+                redirect_uri="https://app/cb",
+                verifier="v",
+                client=client,
             )
 
 
@@ -331,8 +377,13 @@ async def test_a_public_client_omits_the_secret_rather_than_sending_an_empty_one
 
     async with transport(handler) as client:
         await exchange_code(
-            METADATA, code="c", client_id="c", client_secret=None,
-            redirect_uri="https://app/cb", verifier="v", client=client,
+            METADATA,
+            code="c",
+            client_id="c",
+            client_secret=None,
+            redirect_uri="https://app/cb",
+            verifier="v",
+            client=client,
         )
     assert "client_secret" not in sent
 
@@ -382,7 +433,14 @@ def test_the_diagnostic_summary_carries_no_personal_data() -> None:
     """It goes to logs. An email or a group list there is a data-protection problem that nobody
     notices until an audit."""
     summary = summarise_for_diagnostics(
-        {"iss": "https://idp", "aud": "client", "sub": "s", "email": "a@acme.com", "groups": ["eng"], "name": "A Person"}
+        {
+            "iss": "https://idp",
+            "aud": "client",
+            "sub": "s",
+            "email": "a@acme.com",
+            "groups": ["eng"],
+            "name": "A Person",
+        }
     )
     assert "a@acme.com" not in summary
     assert "A Person" not in summary
@@ -391,7 +449,7 @@ def test_the_diagnostic_summary_carries_no_personal_data() -> None:
 
 
 def test_unverified_decoding_exists_for_error_messages_only() -> None:
-    """"Your token's audience was X, we expected Y" is the difference between a five-minute fix
+    """ "Your token's audience was X, we expected Y" is the difference between a five-minute fix
     and a support ticket -- and it cannot be produced from a token that failed verification."""
     import jwt
 
