@@ -77,6 +77,7 @@ GLOBAL_TABLES: frozenset[str] = frozenset(
         "platform_operators",
         "platform_sessions",
         "support_grants",
+        "platform_audit_logs",
         # Resolved *before* a principal exists (the request must know which pool to query), so
         # it cannot depend on the guard that a principal arms. It carries a tenant_id column but
         # is read by the routing layer, not by tenant-facing queries.

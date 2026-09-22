@@ -278,13 +278,13 @@ def test_a_login_hint_skips_the_account_picker() -> None:
 
 
 def test_each_request_has_a_fresh_nonce_and_verifier() -> None:
-    args = dict(
-        client_id="c",
-        redirect_uri="https://app/cb",
-        idp_config_id=CONFIG_ID,
-        tenant_id=TENANT,
-        state_secret=SECRET,
-    )
+    args = {
+        "client_id": "c",
+        "redirect_uri": "https://app/cb",
+        "idp_config_id": CONFIG_ID,
+        "tenant_id": TENANT,
+        "state_secret": SECRET,
+    }
     first = build_authorization_request(METADATA, **args)  # type: ignore[arg-type]
     second = build_authorization_request(METADATA, **args)  # type: ignore[arg-type]
     assert first.nonce != second.nonce

@@ -361,9 +361,8 @@ async def test_waiting_forever_is_not_an_option() -> None:
 
 async def test_tenants_do_not_share_a_concurrency_budget() -> None:
     limiter = ConcurrencyLimiter(per_tenant=1, acquire_timeout_s=0.05)
-    async with limiter.slot("t:1"):
-        async with limiter.slot("t:2"):
-            pass
+    async with limiter.slot("t:1"), limiter.slot("t:2"):
+        pass
 
 
 async def test_in_flight_is_reported_for_monitoring() -> None:

@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from app.api.errors import register_exception_handlers
 from app.api.routes import auth as auth_routes
 from app.api.routes import oidc as oidc_routes
-from app.auth.discovery import DiscoveryResult, IdpSummary, LoginMethod, TenantLoginPolicy
+from app.auth.discovery import DiscoveryResult, IdpSummary, TenantLoginPolicy
 from app.core.config import Settings
 from app.models.identity import IdpKind, IdpState
 from app.security.capabilities import Capability, Role

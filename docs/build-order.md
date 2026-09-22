@@ -309,3 +309,42 @@ existed is narrowed the next time it is used.
 **Not verified:** "limits hold across two replicas" needs Redis and two API containers. The Lua
 script is tested against a fake, and the in-memory limiter is explicitly documented as wrong
 across replicas, which is why the production settings validator requires a Redis URL.
+
+
+## Step 16: the operator plane
+
+The acceptance criterion — *an operator cannot read tenant content without a grant* — is tested
+across every operator role, and from every direction a real implementation leaks from: a grant
+for the wrong tenant, another operator's grant, an expired one, a revoked one, a metadata grant
+used for content, and the OWNER who assumes seniority is consent. 75 tests.
+
+Four separations, each closing a door the others leave open:
+
+* **A separate table.** `users.role` has a CHECK listing exactly the four tenant roles, so a
+  platform role is literally unstorable inside a tenant — no JIT path, migration or seed script
+  can mint one.
+* **A separate token audience.** Tested in both directions: a tenant token is refused by the
+  operator API, and an operator token by the tenant API.
+* **A separate ASGI app on a separate host.** A test asserts no `/ops` path exists on the tenant
+  app, so a routing mistake cannot put a vendor endpoint on a customer's domain.
+* **Content needs a grant the customer approved** — a row with a mandatory expiry (a database
+  CHECK refuses `expires_at <= created_at`), a stated reason, and a named approver unless it is
+  break-glass.
+
+Three design points worth keeping:
+
+**Scopes are ordered, not independent flags.** `metadata` answers most support questions and
+needs only standing consent; `content` reads the customer's words; `impersonate` names one user.
+Keeping the cheap case genuinely cheap is what stops every ticket requesting content access on
+principle — if reading a job's error cost the same approval as reading a document, the
+distinction would stop meaning anything.
+
+**Actions are opt-in to the requirements map, and absence is refusal.** An action added without a
+decision is unreachable and fails a test, rather than inheriting the weakest rule.
+
+**Refusals are audited too.** An operator repeatedly attempting content access they do not have
+is the signal worth alerting on, and it is invisible if only successes are recorded. `touched_content`
+stays false on a refusal, because that is the field a customer's security review filters on.
+
+A query string counts as content, deliberately: what someone asked is often about themselves or a
+colleague.

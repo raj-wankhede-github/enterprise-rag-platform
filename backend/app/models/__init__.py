@@ -28,6 +28,14 @@ from app.models.identity import (
     UserIdentity,
 )
 from app.models.job import IndexGeneration, IngestJob, JobEvent
+from app.models.platform import (
+    GrantScope,
+    OperatorRole,
+    PlatformAuditLog,
+    PlatformOperator,
+    PlatformSession,
+    SupportGrant,
+)
 from app.models.tenant import Tenant, TenantIndexBinding
 from app.models.user import Collection, RoleElevationGrant, User, UserCollectionScope
 
@@ -44,6 +52,7 @@ __all__ = [
     "DocumentUploadEvent",
     "DocumentVersion",
     "EmbeddingCache",
+    "GrantScope",
     "IdpConfig",
     "IdpKind",
     "IdpProtocol",
@@ -52,9 +61,14 @@ __all__ = [
     "IngestJob",
     "JobEvent",
     "LoginAttempt",
+    "OperatorRole",
     "Parent",
+    "PlatformAuditLog",
+    "PlatformOperator",
+    "PlatformSession",
     "RoleElevationGrant",
     "Session",
+    "SupportGrant",
     "Tenant",
     "TenantDomain",
     "TenantIndexBinding",
