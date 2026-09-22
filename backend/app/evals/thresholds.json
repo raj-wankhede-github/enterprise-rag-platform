@@ -23,7 +23,11 @@
     "The rerank rows are measured with the LEXICAL reranker, which is what CI can run offline.",
     "It is a deliberate floor, not the shipping model: whatever the cross-encoder achieves above",
     "these numbers is the model's genuine contribution rather than the effect of reordering by",
-    "term overlap. Run bench/rerank_bench.py against the models container for the real numbers."
+    "term overlap. Run bench/rerank_bench.py against the models container for the real numbers.",
+    "",
+    "The planner row must not score below the rerank row it is derived from. The fast path is a",
+    "latency optimisation, so any quality it costs is a regression rather than a trade -- these",
+    "floors are what turn that into a build failure instead of a judgement call."
   ],
   "max_regression": 0.02,
   "absolute": {
@@ -78,6 +82,15 @@
       "unsupported_answer_rate": 0.25,
       "permission_leak_rate": 0.0,
       "citation_support": 0.95
+    },
+    "planner (fast path on)": {
+      "recall@10": 0.93,
+      "recall@50": 0.92,
+      "ndcg@10": 0.84,
+      "mrr@10": 0.83,
+      "abstention_recall": 0.7,
+      "unsupported_answer_rate": 0.25,
+      "permission_leak_rate": 0.0
     }
   }
 }

@@ -13,7 +13,6 @@ start describing a system nobody runs.
 from __future__ import annotations
 
 import json
-import re
 import time
 import uuid
 from collections.abc import Sequence
@@ -48,6 +47,8 @@ from app.ingestion.chunker import StructureAwareChunker
 from app.ingestion.contextualize import DocumentContext, TemplateContextualizer
 from app.ingestion.loaders import default_registry
 from app.ingestion.pipeline import IngestionPipeline, index_action
+from app.query.planner import QueryPlanner
+from app.query.types import QueryPlan, Route
 from app.retrieval.hybrid import OpenSearchHybridRetriever
 from app.retrieval.rerank.base import IdentityReranker, Reranker
 from app.retrieval.rerank.lexical import LexicalEntailmentScorer, LexicalReranker
@@ -82,6 +83,9 @@ class AblationConfig:
     #: looks sufficient; verification can, so the two produce different made_up rates and the
     #: table should show both.
     answer: bool = False
+    #: Let the query planner choose the route, including the fast path. Its own row because
+    #: the fast path's claim is about latency, and a latency claim needs its own measurement.
+    use_planner: bool = False
     #: Enable the entailment layer of citation verification. Its own row because it is the
     #: stage predicted to catch "evidence quoted faithfully that does not answer the question",
     #: and a prediction deserves its own measurement rather than being folded into another.
@@ -108,6 +112,13 @@ DEFAULT_ABLATIONS: tuple[AblationConfig, ...] = (
         legs=frozenset({"bm25", "exact", "dense", "parent"}),
         contextual=True,
         answer=True,
+    ),
+    AblationConfig(
+        "planner (fast path on)",
+        legs=frozenset({"bm25", "exact", "dense", "parent"}),
+        contextual=True,
+        reranker="lexical",
+        use_planner=True,
     ),
     AblationConfig(
         "hybrid + rerank + verified + entail",
@@ -156,6 +167,7 @@ class ConfigReport:
     citation_support: float
     p50_ms: float
     p95_ms: float
+    fast_path_questions: int = 0
     leg_contribution: dict[str, int] = field(default_factory=dict)
     per_category_recall: dict[str, float] = field(default_factory=dict)
     unresolved_labels: int = 0
@@ -323,10 +335,14 @@ class EvalRunner:
             scorer=LexicalEntailmentScorer() if config.entailment else None,
         )
         results: list[QuestionResult] = []
+        fast_path_questions = 0
 
         for question in self.questions:
             resolved = resolve(question, index["chunks"])
-            request = _request_for(question, index, config, profile)
+            plan = await _plan_for_question(question)
+            request = _request_for(question, index, config, profile, plan)
+            if plan.route is Route.FAST_EXACT:
+                fast_path_questions += 1
 
             started = time.perf_counter()
             outcome = await retriever.retrieve(request)
@@ -372,7 +388,9 @@ class EvalRunner:
                 )
             )
 
-        return _summarise(config.name, self.questions, results, len(index["chunks"]))
+        report = _summarise(config.name, self.questions, results, len(index["chunks"]))
+        report.fast_path_questions = fast_path_questions
+        return report
 
 
 def _reranker_for(config: AblationConfig) -> Reranker:
@@ -380,7 +398,11 @@ def _reranker_for(config: AblationConfig) -> Reranker:
 
 
 def _request_for(
-    question: GoldenQuestion, index: dict[str, Any], config: AblationConfig, profile: RetrievalProfile
+    question: GoldenQuestion,
+    index: dict[str, Any],
+    config: AblationConfig,
+    profile: RetrievalProfile,
+    plan: QueryPlan | None = None,
 ) -> RetrievalRequest:
     """One request shape for both the retrieval-only and the full answer arms.
 
@@ -397,8 +419,10 @@ def _request_for(
             include_superseded=question.include_superseded,
         ),
         profile=profile,
-        exact_tokens=_identifiers(question.question),
-        legs=config.legs,
+        exact_tokens=plan.exact_tokens if plan else (),
+        # The fast-path row lets the planner choose the legs; every other row pins them, so the
+        # ablation still isolates one variable at a time.
+        legs=(plan.legs() if plan and config.use_planner else config.legs),
         top_k=100,
     )
 
@@ -420,15 +444,19 @@ def _dumps(payload: Any) -> str:
     return json.dumps(payload, default=str)
 
 
-def _identifiers(question: str) -> tuple[str, ...]:
-    """Rules-only identifier extraction, matching what the query planner will do.
+#: One planner for the whole run. Stateless, so sharing it costs nothing and guarantees every
+#: row sees identical query understanding.
+_PLANNER = QueryPlanner()
 
-    Kept here rather than imported from the planner because the planner does not exist yet; when
-    it does, this is deleted and the planner is called, so the evaluation measures the shipping
-    path rather than an approximation of it.
+
+async def _plan_for_question(question: GoldenQuestion) -> QueryPlan:
+    """The real planner, not an approximation of it.
+
+    Earlier this was a local regex that mimicked what the planner would eventually do. Measuring
+    an approximation of the shipping path is how an evaluation drifts away from the system it
+    claims to describe, so now that the planner exists the evaluation calls it.
     """
-    pattern = re.compile(r"\b[A-Z]{2,5}[-_]\d{2,}(?:[-_]\d+)*\b|\b\d+\.\d+(?:\.\d+)+\b")
-    return tuple(dict.fromkeys(pattern.findall(question)))
+    return await _PLANNER.plan(question.question)
 
 
 def _per_leg(candidates: Sequence[Any]) -> dict[str, list[str]]:

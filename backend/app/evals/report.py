@@ -184,6 +184,12 @@ def render_details(reports: Sequence[ConfigReport]) -> str:
         warning = corpus_warning(report)
         if warning:
             lines.append(f"  NOTE {warning}")
+        if report.fast_path_questions:
+            share = report.fast_path_questions / max(1, report.questions)
+            lines.append(
+                f"  fast path taken on {report.fast_path_questions}/{report.questions} "
+                f"questions ({share:.0%}) -- no LLM call, no dense leg, no reranker"
+            )
         if report.unresolved_labels:
             lines.append(
                 f"  WARNING {report.unresolved_labels} label(s) matched no chunk -- "

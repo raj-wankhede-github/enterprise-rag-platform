@@ -14,8 +14,8 @@ after step 6 ships without the ablation table showing it earned its latency.
 | 6 | **Eval harness, golden set, ablation runner, CI gate** | the table prints in under four minutes | **done** -- 20s, gating CI |
 | 7 | Answer path: assembly, extractive generator, deterministic verification | citation-support and abstention metrics appear in the table | **done** -- made_up 0.300 -> 0.200, `cite_ok` in the table |
 | 8 | `models` container, cross-encoder reranker, `rerank_bench.py` | a real nDCG delta, p95 within budget | **done** -- nDCG@10 0.832 -> 0.895 for +12 ms |
-| 9 | Query understanding: rules, fast path, then one LLM call | fast path p95 under 60 ms | **next** |
-| 10 | Contextual retrieval: template, then LLM with prompt caching | `+contextual` row, measured cost per 1k chunks | pending |
+| 9 | Query understanding: rules, fast path, then one LLM call | fast path p95 under 60 ms | **done** -- same quality, lower p95 |
+| 10 | Contextual retrieval: template, then LLM with prompt caching | `+contextual` row, measured cost per 1k chunks | **next** |
 | 11 | `parser` container (Docling), OCR, tables | scanned-PDF and table strata pass | pending |
 | 12 | Generation rebuild and atomic alias swap, shadow-evaluated | zero errors and zero empty results under continuous traffic | pending |
 | 13 | SSO: discovery, OIDC, JIT provisioning, admin wizard | round trip against Keycloak and a real Entra tenant | pending |
@@ -123,3 +123,35 @@ The two surviving cases need a judgement of *"does this evidence answer the ques
 *"does this evidence support the claim"*. Those are different questions and only the second was
 being asked. A real cross-encoder scoring the question against the cited evidence is the thing
 that can answer the first.
+
+
+## Step 9: the fast path costs nothing in quality
+
+```
+config                        recall@10  nDCG@10  MRR@10  p95ms
+hybrid + contextual + rerank  0.980      0.895    0.889   46
+planner (fast path on)        0.980      0.895    0.889   31
+```
+
+Identical quality, lower p95. That is the claim the fast path makes and the only one it is
+allowed to make: it is a latency optimisation, so any quality it cost would be a regression
+rather than a trade. The thresholds file now encodes that, so a fast path that starts losing
+recall fails the build.
+
+**The fast path fires on 5 of 61 questions (8%)**, not the 15-30% quoted for real traffic. That
+is not a contradiction and not a disappointment -- the golden set is deliberately question-shaped
+to exercise retrieval, so it under-represents the bare-identifier lookups ("TKT-99812",
+"SUP-4471") that dominate a real deployment's cheap tail. The 8% is what this corpus measures;
+the traffic figure is an expectation that only a real deployment can confirm.
+
+Two bugs the tests caught, both of which would have been silent:
+
+- `SEC-4.2.1` was not recognised as an identifier. The code pattern required two leading digits,
+  so section references fell through to dense retrieval on an opaque code -- the single worst
+  case for embeddings, and precisely what the exact leg exists to prevent.
+- `"previous"` was missing from the historical-intent words (only `"previously"` was there), so
+  "the previous policy" would have been answered from current documents only.
+
+The eval runner now calls the real planner instead of the local regex that approximated it.
+Measuring an approximation of the shipping path is how an evaluation drifts away from the system
+it claims to describe.
