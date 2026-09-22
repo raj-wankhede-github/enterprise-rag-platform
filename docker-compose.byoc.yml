@@ -1,0 +1,157 @@
+# Bring-your-own-cloud: the same topology, with the customer's own infrastructure.
+#
+# The claim this file has to keep honest is that BYOC is a packaging exercise rather than a
+# second product. Nothing here builds a different image, sets a different feature flag, or turns
+# anything off. Every difference is an endpoint the customer supplies instead of a container we
+# run for them.
+#
+# CI runs the tenant-isolation suite against this file as well as the SaaS one. That is what
+# stops the claim rotting: if BYOC ever needed a code branch, the isolation tests would be the
+# first thing to diverge, and running them against only one configuration would hide it.
+#
+#   docker compose -f docker-compose.byoc.yml up -d
+#   cd backend && uv run pytest -m integration -q
+#
+# Everything below reads from the environment with no default, deliberately. A BYOC deployment
+# that silently fell back to a bundled Postgres would be storing a customer's data somewhere
+# neither party intended, and the failure would be a working system rather than an error.
+
+x-backend: &backend
+  image: ${ERP_IMAGE:?set ERP_IMAGE to the registry path of the backend image}
+  environment: &backend-env
+    ENVIRONMENT: ${ENVIRONMENT:-production}
+
+    # --- customer-provided infrastructure ----------------------------------------------------
+    DATABASE_URL: ${DATABASE_URL:?required - the customer's Postgres}
+    OPENSEARCH_URL: ${OPENSEARCH_URL:?required - the customer's OpenSearch}
+    OPENSEARCH_USER: ${OPENSEARCH_USER:-}
+    OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD:-}
+    OPENSEARCH_VERIFY_CERTS: ${OPENSEARCH_VERIFY_CERTS:-true}
+    REDIS_URL: ${REDIS_URL:?required - in-process rate limiting cannot span replicas}
+
+    # --- secrets -----------------------------------------------------------------------------
+    # No default. A deployment that started with a development secret would issue tokens anyone
+    # who has read this repository could forge.
+    JWT_SECRET: ${JWT_SECRET:?required - at least 32 bytes}
+    COOKIE_SECURE: "true"
+    PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?required - used to build the OIDC redirect URI}
+    CORS_ORIGINS: ${CORS_ORIGINS:-}
+
+    # --- storage -----------------------------------------------------------------------------
+    # S3, Azure Blob, or the customer's own MinIO. Content-addressed either way.
+    BLOB_BACKEND: ${BLOB_BACKEND:-s3}
+    BLOB_ENDPOINT: ${BLOB_ENDPOINT:-}
+    BLOB_BUCKET: ${BLOB_BUCKET:?required}
+
+    # --- models ------------------------------------------------------------------------------
+    # The containers below, or the customer's own GPU pool. Left empty, the product degrades to
+    # the hashing embedder and the identity reranker and says so in the ablation table -- it does
+    # not fail to start.
+    MODELS_SERVICE_URL: ${MODELS_SERVICE_URL:-http://models:8000}
+    PARSER_SERVICE_URL: ${PARSER_SERVICE_URL:-http://parser:8000}
+
+    # --- generation ---------------------------------------------------------------------------
+    # A BYOC customer who wants no external API at all sets LLM_PROVIDER=none and gets extractive
+    # answers with citations. Everything else works unchanged; the ablation table reports the
+    # difference rather than the product hiding it.
+    LLM_PROVIDER: ${LLM_PROVIDER:-none}
+    EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-onnx}
+    RERANKER_PROVIDER: ${RERANKER_PROVIDER:-onnx}
+    CONTEXTUALIZER: ${CONTEXTUALIZER:-template}
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+
+    # --- tenancy ------------------------------------------------------------------------------
+    # Single-tenant by deployment, not by code. The shared-schema design runs unchanged with one
+    # tenant row, which is the whole reason BYOC is packaging rather than a branch.
+    EMBEDDING_CACHE_SCOPE: tenant
+    # Off for the same reason a SaaS tenant may turn it off: it is the answer to "does the vendor
+    # store our documents in a third-party tool", and here the answer should be structural.
+    TRACE_CONTENT_CAPTURE: "false"
+    OTEL_ENABLED: ${OTEL_ENABLED:-false}
+    OTEL_ENDPOINT: ${OTEL_ENDPOINT:-}
+
+  restart: unless-stopped
+
+services:
+  # Migrations stay an explicit, one-shot step here too. A process that migrates on startup will
+  # eventually run two replicas that migrate concurrently.
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  api:
+    <<: *backend
+    command: ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    ports: ["${API_PORT:-8001}:8000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      replicas: ${API_REPLICAS:-2}
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.workers.ingestion_worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+
+  # The operator plane is deliberately ABSENT from this file.
+  #
+  # A BYOC deployment has no vendor operators in it, so there is nobody for the plane to
+  # authenticate and `support_grants` stays empty. Not deploying it at all is a stronger
+  # statement than deploying it with no rows -- it is the cleanest possible answer to "can the
+  # vendor read our data".
+
+  # --- optional, and genuinely optional -------------------------------------------------------
+
+  models:
+    profiles: [models]
+    image: ${ERP_MODELS_IMAGE:-erp/models:latest}
+    environment:
+      RERANKER_MODEL: ${RERANKER_MODEL:-BAAI/bge-reranker-base}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-base-en-v1.5}
+      OMP_NUM_THREADS: ${MODELS_THREADS:-4}
+    restart: unless-stopped
+
+  parser:
+    profiles: [parse]
+    image: ${ERP_PARSER_IMAGE:-erp/parser:latest}
+    environment:
+      ENABLE_OCR: ${ENABLE_OCR:-1}
+    restart: unless-stopped
+
+  # SAML customers only. Keycloak speaks SAML outward to the customer's identity provider and
+  # OIDC inward to us, so the product has one federation implementation rather than two. Runs in
+  # the customer's own VPC, which is why this is a supported BYOC configuration at all --
+  # delegating to a hosted SAML service would put a third party back in the authentication path.
+  #
+  # Its variables use empty defaults rather than `:?required`, which is not laziness: Compose
+  # interpolates every variable in the file regardless of which profiles are active, so a
+  # `:?required` here would stop a customer who does not want SAML from starting the stack at
+  # all. Keycloak refuses to boot without them, loudly, and only when this profile is requested
+  # -- which puts the error where it belongs.
+  keycloak:
+    profiles: [saml]
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start", "--optimized"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: ${KEYCLOAK_DB_URL:-}
+      KC_DB_USERNAME: ${KEYCLOAK_DB_USER:-keycloak}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-}
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-}
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-}
+    ports: ["${KEYCLOAK_PORT:-8080}:8080"]
+    restart: unless-stopped

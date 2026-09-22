@@ -392,3 +392,64 @@ customer-facing record, deliberately not dependent on an observability vendor be
 
 **Not verified:** the live round trip against a real Microsoft Graph tenant. Every Graph response
 shape is tested against a mock transport; what remains untested is Graph's own behaviour.
+
+
+## Step 18: SAML, SCIM and BYOC
+
+See `docs/saml-and-byoc.md` for the reasoning. Three things worth repeating here:
+
+**The product does not speak SAML.** Customers who need it reach us through a self-hosted
+Keycloak broker that speaks SAML outward and OIDC inward, so there is one federation
+implementation. That removes `xmlsec` — which has no usable Windows wheels — and, more
+importantly, removes XML signature wrapping from our attack surface. That attack is that a
+response can carry a validly-signed assertion *and* an unsigned one, and a library that validates
+the first while the application reads the second authenticates the attacker as anyone they name.
+Several widely-used SAML libraries have shipped exactly that.
+
+**SCIM is for deprovisioning, not provisioning.** JIT already creates users correctly. What it
+cannot do is end access when someone leaves. The bug worth knowing about: Entra has historically
+sent `active` as the **string** `"False"`, and `bool("False")` is `True` — so the naive
+implementation activates the account it was just told to disable and reports success. Okta sends
+deactivation with no `path` at all, which a path-only implementation ignores. Both are tested.
+
+A bug the tests found: `parse_filter` split on whitespace, so `userName eq "a" and active eq true`
+was silently truncated to a simple filter with a nonsense value. The directory would get an empty
+result, conclude the user did not exist, and create a duplicate. It is now anchored and refuses
+anything it does not fully understand.
+
+**BYOC is a compose file, and CI is what keeps that true.** `docker-compose.byoc.yml` builds
+nothing, disables nothing, and has no defaults for customer infrastructure — a deployment that
+silently fell back to a bundled Postgres would store a customer's data somewhere neither party
+intended, and the failure would be a *working system*. The operator plane is deliberately absent:
+a BYOC deployment has no vendor operators, and not deploying the plane is a stronger statement
+than deploying it empty.
+
+A trap found while writing it: Compose interpolates every variable in a file regardless of which
+profiles are active, so `${KEYCLOAK_DB_URL:?required}` on a profiled service stopped every
+customer who did *not* want SAML from starting the stack at all.
+
+**Not verified:** the BYOC CI job is written but has not run — it needs GitHub Actions. The live
+round trips (Keycloak, a real Entra tenant, a real Graph tenant) all remain untested for the same
+reason the rest do: this machine has no disk for the containers.
+
+---
+
+## Where the build stands
+
+All 18 steps are implemented. **1037 backend tests and 56 frontend tests pass**; ruff, mypy
+strict, ESLint, `tsc` and the production build are all clean.
+
+What has **not** been run, and needs infrastructure rather than code:
+
+| | Needs |
+|---|---|
+| Integration suite (69 tests + the generation-swap suite) | OpenSearch + Postgres |
+| Generation swap under continuous traffic | OpenSearch |
+| Limits holding across two replicas | Redis + 2 API containers |
+| SSO round trip | Keycloak, a real Entra tenant |
+| SharePoint sync | a real Microsoft Graph tenant |
+| Parser container | ~4 GB disk for the Docling image |
+| BYOC isolation job | GitHub Actions |
+
+Every one of these is a claim currently resting on a mock. The code either side of each network
+boundary is tested; what is untested is the other side's behaviour.

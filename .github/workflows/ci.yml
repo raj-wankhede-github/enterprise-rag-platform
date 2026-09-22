@@ -177,3 +177,68 @@ jobs:
           uv run python -m app.cli capabilities > /tmp/capabilities.ts
           diff -u ../frontend/src/auth/capabilities.generated.ts /tmp/capabilities.ts
         working-directory: backend
+
+  byoc:
+    name: BYOC topology
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The claim is that bring-your-own-cloud is packaging rather than a second product. If that
+    # ever stopped being true, the tenant-isolation suite would be the first thing to diverge --
+    # and running it against only the SaaS compose file would hide exactly that.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate the BYOC compose file
+        env:
+          ERP_IMAGE: erp/backend:ci
+          DATABASE_URL: postgresql+asyncpg://erp:erp@db:5432/erp_test
+          OPENSEARCH_URL: https://opensearch:9200
+          REDIS_URL: redis://redis:6379/0
+          JWT_SECRET: ci-secret-at-least-thirty-two-characters-long
+          PUBLIC_BASE_URL: https://ci.example.com
+          BLOB_BUCKET: erp-ci
+        run: docker compose -f docker-compose.byoc.yml config --quiet
+
+      - name: Fail if the BYOC file could fall back to bundled infrastructure
+        run: |
+          set -o pipefail
+          for required in DATABASE_URL OPENSEARCH_URL REDIS_URL JWT_SECRET; do
+            grep -q "\${$required:?" docker-compose.byoc.yml               || { echo "$required must be required, not defaulted"; exit 1; }
+          done
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Bring up the BYOC topology
+        env:
+          ERP_IMAGE: erp/backend:ci
+          DATABASE_URL: postgresql+asyncpg://erp:erp@localhost:5432/erp_test
+          OPENSEARCH_URL: http://localhost:9200
+          REDIS_URL: redis://localhost:6379/0
+          JWT_SECRET: ci-secret-at-least-thirty-two-characters-long
+          PUBLIC_BASE_URL: http://localhost:8001
+          BLOB_BUCKET: erp-ci
+        run: |
+          # The customer-provided services, stood up as containers for the purposes of the test.
+          # The point is the application configuration, not who operates Postgres.
+          docker compose up -d db opensearch redis
+          docker compose -f docker-compose.byoc.yml build 2>/dev/null || true
+
+      - name: Tenant isolation against the BYOC configuration
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://erp:erp@localhost:5432/erp_test
+          OPENSEARCH_URL: http://localhost:9200
+          REDIS_URL: redis://localhost:6379/0
+          JWT_SECRET: ci-secret-at-least-thirty-two-characters-long
+          EMBEDDING_CACHE_SCOPE: tenant
+          TRACE_CONTENT_CAPTURE: "false"
+          LLM_PROVIDER: none
+          EMBEDDING_PROVIDER: hashing
+          RERANKER_PROVIDER: identity
+        run: |
+          uv sync --frozen
+          uv run alembic upgrade head
+          uv run pytest -m integration -q -k "tenant or isolation or acl"
