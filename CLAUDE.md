@@ -141,6 +141,41 @@ uploader's role; the only role-sensitive parts are that 409 and the visibility c
 `embedding_cache` is keyed on `(model_id, content_sha256)` — and `chunk_vectors` persists fp16
 vectors so a generation rebuild re-embeds nothing.
 
+## Auth, keys and limits
+
+- **Identity is matched on the IdP's immutable subject, never email.** Entra's `oid` before
+  `sub`, because `sub` is pairwise per application and changes if the app registration is
+  recreated. Email is consulted in exactly one place: linking a pre-provisioned account on its
+  *first* SSO login, and only when the provider marks it verified.
+- **JIT can never create an ADMIN.** A new user gets the config's `default_role`, which a
+  database CHECK forbids from being ADMIN. Group mappings apply to existing users only.
+- **Highest matching role wins, not first match** -- first-match makes the outcome depend on
+  dictionary ordering. An existing user whose groups stop matching keeps their role, or every
+  administrator is silently demoted the day a claim name changes.
+- **Every password-login failure is identical** in message, status and response time. The real
+  reason goes to `login_attempts`.
+- **The client refreshes ONCE however many requests 401 at the same moment**
+  (`frontend/src/api/client.ts`). Six parallel refreshes means five replays of a rotated token,
+  which the backend correctly reads as theft and answers by revoking the family -- signing the
+  user out everywhere because they loaded a page.
+- **API keys can never hold** `sso:configure`, `user:manage`, `audit:view`, `apikey:manage_any`
+  or `export:documents`. Subtracted when the principal is built, not when the key is created.
+- **Rate limits and concurrency caps are different controls.** Fifty concurrent `ask` requests
+  are all inside a 300/minute budget and all hold an LLM call open. `enforce()` checks every
+  scope before recording any, or a tenant-level throttle also drains each user's own allowance.
+
+## The operator plane
+
+Separate table, separate token audience, separate ASGI app on a separate host. `users.role` has
+a CHECK listing exactly the four tenant roles, so a platform role is unstorable in a tenant.
+
+**Reading tenant content requires a grant the customer approved** -- a row with a mandatory
+expiry, a stated reason and a named approver unless it is break-glass. Scopes are ordered
+(`metadata` < `content` < `impersonate`) rather than independent flags, and keeping the metadata
+case genuinely cheap is what stops every ticket requesting content access on principle.
+`app/platform/grants.py::authorize` is the only decision point, and an action missing from
+`_REQUIREMENTS` is refused rather than defaulted.
+
 ## Conventions
 
 - Ruff (line length 120, formatter owns wrapping) and mypy strict are configured in
@@ -152,6 +187,13 @@ vectors so a generation rebuild re-embeds nothing.
 - Migrations are explicit. Never at app startup.
 - Integration tests refuse any database not named `*_test`.
 - Keep source ASCII: tool-written `\uXXXX` escapes become literal characters.
+- The frontend's capability table is **generated** (`uv run python -m app.cli capabilities`) and
+  a test regenerates it rather than comparing two checked-in copies -- two copies drift together.
+- Document text is rendered as text, never markup. ESLint bans `dangerouslySetInnerHTML`, and
+  `localStorage`/`sessionStorage` in production code, because the session lives in HttpOnly
+  cookies.
+- Observability attributes deny by default in both directions: content attributes need the
+  tenant's opt-in, and an *unclassified* attribute is dropped outright.
 
 ## Reference
 
