@@ -14,6 +14,14 @@ evidence, and every claim carries a chunk-ID citation.** Do not add a code path 
 LLM without evidence, returns unvalidated text, or relaxes validation to make a case pass — add
 an eval case instead.
 
+**Abstention is a first-class success, not an error.** `app/answer/evidence.py` gates on the
+retrieved candidates *before* the generator runs, so a model handed thin evidence never gets the
+chance to be fluent about it. `app/answer/abstain.py` holds the messages as plain strings, never
+an LLM call — a model asked to phrase a refusal will sometimes answer the question instead. The
+messages must state plainly that there is no answer, never grovel, never hedge toward guessing,
+say what was searched, offer a next step, and never name a document the user cannot see.
+`tests/unit/test_abstention.py` fails the build on any of those.
+
 The second invariant: **every retrieval query is filtered by tenant, rank and ACL *inside* the
 query.** Never post-filter. See "Tenancy" below.
 
@@ -58,6 +66,16 @@ libraries — do not collapse them into the backend image.
   application code**, not OpenSearch's `hybrid` query: we fuse four legs across two indices,
   need exact per-leg depth (`pagination_depth` caps recall@50), want per-tenant weights as a
   Postgres row, and want fusion unit-testable with no cluster.
+- **The parent leg needs `parent_id` in the parent mapping.** That field is how a section
+  projects down to its children; dropping it makes the leg silently link nothing. There is a
+  test for it because it has already happened once.
+- **`fuse_rrf` tracks what *this* pass counted**, not what is already on `candidate.legs`. The
+  parent leg pre-populates that entry while projecting, and an earlier version read it as
+  "already counted" and fused every parent-only candidate to zero.
+- **A failed leg degrades, never raises.** Losing the dense leg costs recall; raising costs the
+  answer. Failures land in `RetrievalDiagnostics.legs[].error`.
+- **Priors are applied after fusion**, bounded and multiplicative, so each leg stays
+  independently measurable and the prior is its own ablation row.
 - **`app/search/dsl.py` is the only place a filter clause is constructed.** Every leg, both
   halves of a hybrid query. The ACL clauses go into `bool.filter` *and* `knn.filter` — putting
   them only in the outer bool post-filters the kNN results, which silently destroys recall for

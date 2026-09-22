@@ -21,8 +21,9 @@ built on top of it in the order set out in [`docs/build-order.md`](docs/build-or
 | Data model + ORM tenant guards | done |
 | OpenSearch mappings, analysis chain, generation fingerprinting | done, verified on a live cluster |
 | Ingestion pipeline: loaders, chunker, contextualiser, embedder | done, 98% covered |
-| Retrieval legs + `_msearch` | next |
-| Evaluation harness + ablation table | after that, before any tuning |
+| Four retrieval legs + `_msearch` + RRF + priors | done, verified on a live cluster |
+| Abstention: evidence gate and the "I don't know" contract | done |
+| Evaluation harness + ablation table | next, before any tuning |
 | SSO, connectors, admin UI | later |
 
 ## Quick start
@@ -114,7 +115,7 @@ uv run pytest -m integration -q   # needs Postgres + OpenSearch
 uv run python -m app.cli eval --ablate
 ```
 
-Four test suites matter more than the rest and must never be marked `xfail`:
+Five test suites matter more than the rest and must never be marked `xfail`:
 
 - `tests/unit/test_capabilities.py` — the four-role chain stays a chain.
 - `tests/security/test_dsl_isolation.py` — every query permutation carries exactly one tenant
@@ -123,6 +124,8 @@ Four test suites matter more than the rest and must never be marked `xfail`:
 - `tests/integration/test_ingest_to_search.py` — two tenants holding documents with the same
   distinctive tokens, so only the filter can tell them apart. Covers BM25 and kNN isolation, hit
   counts, visibility rank, and a stale generation seeing nothing.
+- `tests/unit/test_abstention.py` — when the system refuses to answer, and how that refusal
+  reads. A hedging or grovelling message fails the build.
 
 ## License
 
