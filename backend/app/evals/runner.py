@@ -130,6 +130,10 @@ DEFAULT_ABLATIONS: tuple[AblationConfig, ...] = (
     ),
 )
 
+#: The configuration the product actually ships, and therefore the one a shadow evaluation must
+#: measure. Evaluating a rebuild under `bm25_only` would compare a number nobody serves.
+SHIPPING_ABLATION = "hybrid + rerank + verified + entail"
+
 
 @dataclass(slots=True)
 class QuestionResult:

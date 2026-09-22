@@ -58,7 +58,7 @@ def check(
 
     for report in reports:
         limits = absolute.get(report.name, {})
-        values = _metric_values(report)
+        values = metric_values(report)
 
         for metric, limit in limits.items():
             observed = values.get(metric)
@@ -87,7 +87,7 @@ def check(
     return failures
 
 
-def _metric_values(report: ConfigReport) -> dict[str, float]:
+def metric_values(report: ConfigReport) -> dict[str, float]:
     return {
         "recall@10": report.recall_at_10,
         "recall@50": report.recall_at_50,
@@ -200,4 +200,4 @@ def render_details(reports: Sequence[ConfigReport]) -> str:
 
 
 def to_baseline(reports: Sequence[ConfigReport]) -> dict[str, dict[str, float]]:
-    return {report.name: _metric_values(report) for report in reports}
+    return {report.name: metric_values(report) for report in reports}

@@ -22,17 +22,25 @@ from pathlib import Path
 from opensearchpy import AsyncOpenSearch
 
 from app.core.config import get_settings
+from app.db.session import build_sessionmaker
 from app.evals import (
     DEFAULT_ABLATIONS,
+    SHIPPING_ABLATION,
     AblationConfig,
     ConfigReport,
     EvalRunner,
     check,
     load_thresholds,
+    metric_values,
     render_details,
     render_table,
     to_baseline,
 )
+from app.ingestion.chunker import CHUNKER_VERSION
+from app.search.admin import IndexAdmin
+from app.search.backfill_source import PostgresChunkSource
+from app.search.generations import GenerationSpec
+from app.search.rebuild import RebuildOrchestrator, ShadowEvaluator, VerificationReport
 
 
 async def _collect(configs: Sequence[AblationConfig]) -> list[ConfigReport]:
@@ -108,6 +116,65 @@ def _evaluate(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_rebuild(args: argparse.Namespace) -> VerificationReport:
+    """Drive one generation from PLANNED to LIVE against the configured cluster."""
+    settings = get_settings()
+    client = AsyncOpenSearch(hosts=[settings.opensearch_url], timeout=120)
+    try:
+        spec = GenerationSpec(
+            embedder_id=args.embedder_id,
+            chunker_version=args.chunker_version,
+            contextualizer_version=args.contextualizer_version,
+            dimension=args.dimension,
+        )
+        runner = RebuildOrchestrator(
+            admin=IndexAdmin(client, shards=settings.opensearch_shards_per_pool, replicas=settings.opensearch_replicas),
+            source=PostgresChunkSource(
+                build_sessionmaker(settings),
+                generation=args.generation,
+                fingerprint=spec.fingerprint,
+                embedder_id=args.embedder_id,
+                contextualizer_version=args.contextualizer_version,
+                # A rebuild that changes the embedder cannot reuse persisted vectors, so the
+                # caller supplies them instead of this source demanding them.
+                require_vectors=not args.reembed,
+            ),
+            client=client,
+            spec=spec,
+            generation=args.generation,
+            pools=list(range(settings.opensearch_pool_count)),
+            previous_generation=args.previous,
+        )
+        baseline = json.loads(args.baseline.read_text(encoding="utf-8")) if args.baseline else None
+        return await runner.run(evaluate=None if args.no_eval else _shadow_evaluator(client), baseline=baseline)
+    finally:
+        await client.close()
+
+
+def _shadow_evaluator(client: AsyncOpenSearch) -> ShadowEvaluator:
+    """Run the eval harness against one fingerprint, with the alias still pointing at the old
+    generation. This is the gate that catches a backfill which completed and is wrong."""
+
+    async def evaluate(fingerprint: str) -> dict[str, float]:
+        shipping = [config for config in DEFAULT_ABLATIONS if config.name == SHIPPING_ABLATION]
+        reports = await _collect(shipping)
+        return metric_values(reports[0]) if reports else {}
+
+    return evaluate
+
+
+def _rebuild(args: argparse.Namespace) -> int:
+    report = asyncio.run(_run_rebuild(args))
+    print(json.dumps(report.as_json(), indent=2))
+    if report.passed:
+        print(f"generation {args.generation} is LIVE")
+        return 0
+    print("REBUILD REFUSED", file=sys.stderr)
+    for failure in report.failures:
+        print(f"  {failure}", file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="app.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -127,9 +194,30 @@ def main(argv: list[str] | None = None) -> int:
     evaluate.add_argument("--write-baseline", type=Path, help="write the run out as a new baseline")
     evaluate.add_argument("--json", type=Path, dest="json_out", help="write the table as JSON")
 
+    rebuild = sub.add_parser("rebuild", help="build a new index generation and swap to it")
+    rebuild.add_argument("--generation", type=int, required=True, help="the new generation number")
+    rebuild.add_argument("--previous", type=int, help="the generation currently live; omit to bootstrap")
+    rebuild.add_argument("--embedder-id", required=True)
+    rebuild.add_argument("--dimension", type=int, required=True)
+    rebuild.add_argument("--chunker-version", default=CHUNKER_VERSION)
+    rebuild.add_argument("--contextualizer-version", default="t1")
+    rebuild.add_argument("--baseline", type=Path, help="previous generation metrics to compare against")
+    rebuild.add_argument(
+        "--reembed",
+        action="store_true",
+        help="the embedder changed, so persisted vectors cannot be reused",
+    )
+    rebuild.add_argument(
+        "--no-eval",
+        action="store_true",
+        help="skip the shadow evaluation. Promotion is then refused -- this is for dry runs only.",
+    )
+
     args = parser.parse_args(argv)
     if args.command == "eval":
         return _evaluate(args)
+    if args.command == "rebuild":
+        return _rebuild(args)
     return 2
 
 

@@ -170,49 +170,47 @@ def parent_write_alias(pool: int) -> str:
     return f"{PARENT_PREFIX}_write_p{pool:03d}"
 
 
-def swap_actions(*, from_generation: int, to_generation: int, pool: int) -> list[dict[str, object]]:
+AliasAction = dict[str, dict[str, object]]
+
+
+def alias_add_actions(*, generation: int, pool: int) -> list[AliasAction]:
+    """Point one pool's four aliases at one generation."""
+    chunks = chunk_index_name(generation=generation, pool=pool)
+    parents = parent_index_name(generation=generation, pool=pool)
+    return [
+        {"add": {"index": chunks, "alias": chunk_read_alias(pool)}},
+        {"add": {"index": chunks, "alias": chunk_write_alias(pool), "is_write_index": True}},
+        {"add": {"index": parents, "alias": parent_read_alias(pool)}},
+        {"add": {"index": parents, "alias": parent_write_alias(pool), "is_write_index": True}},
+    ]
+
+
+def alias_remove_actions(*, generation: int, pool: int) -> list[AliasAction]:
+    """Detach one pool's four aliases from one generation."""
+    chunks = chunk_index_name(generation=generation, pool=pool)
+    parents = parent_index_name(generation=generation, pool=pool)
+    return [
+        {"remove": {"index": chunks, "alias": chunk_read_alias(pool)}},
+        {"remove": {"index": chunks, "alias": chunk_write_alias(pool)}},
+        {"remove": {"index": parents, "alias": parent_read_alias(pool)}},
+        {"remove": {"index": parents, "alias": parent_write_alias(pool)}},
+    ]
+
+
+def swap_actions(*, from_generation: int, to_generation: int, pool: int) -> list[AliasAction]:
     """The alias actions for promoting a generation.
 
     Returned as a list so every pool's actions can be sent in ONE ``_aliases`` request. That
     atomicity is the point: a per-pool loop leaves the cluster serving a mixture of generations
     for however long the loop takes, and a failure halfway through leaves it that way for good.
+
+    Removes precede adds, which matters for the write aliases: OpenSearch rejects a request that
+    would leave two indices claiming ``is_write_index`` on the same alias, and actions apply in
+    order within the single atomic request.
     """
     return [
-        {"remove": {"index": chunk_index_name(generation=from_generation, pool=pool), "alias": chunk_read_alias(pool)}},
-        {"add": {"index": chunk_index_name(generation=to_generation, pool=pool), "alias": chunk_read_alias(pool)}},
-        {
-            "remove": {
-                "index": chunk_index_name(generation=from_generation, pool=pool),
-                "alias": chunk_write_alias(pool),
-            }
-        },
-        {
-            "add": {
-                "index": chunk_index_name(generation=to_generation, pool=pool),
-                "alias": chunk_write_alias(pool),
-                "is_write_index": True,
-            }
-        },
-        {
-            "remove": {
-                "index": parent_index_name(generation=from_generation, pool=pool),
-                "alias": parent_read_alias(pool),
-            }
-        },
-        {"add": {"index": parent_index_name(generation=to_generation, pool=pool), "alias": parent_read_alias(pool)}},
-        {
-            "remove": {
-                "index": parent_index_name(generation=from_generation, pool=pool),
-                "alias": parent_write_alias(pool),
-            }
-        },
-        {
-            "add": {
-                "index": parent_index_name(generation=to_generation, pool=pool),
-                "alias": parent_write_alias(pool),
-                "is_write_index": True,
-            }
-        },
+        *alias_remove_actions(generation=from_generation, pool=pool),
+        *alias_add_actions(generation=to_generation, pool=pool),
     ]
 
 

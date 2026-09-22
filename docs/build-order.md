@@ -17,7 +17,7 @@ after step 6 ships without the ablation table showing it earned its latency.
 | 9 | Query understanding: rules, fast path, then one LLM call | fast path p95 under 60 ms | **done** -- same quality, lower p95 |
 | 10 | Contextual retrieval: template, then LLM with prompt caching | `+contextual` row, measured cost per 1k chunks | **done** |
 | 11 | `parser` container (Docling), OCR, tables | scanned-PDF and table strata pass | **done** (container not built locally -- see note) |
-| 12 | Generation rebuild and atomic alias swap, shadow-evaluated | zero errors and zero empty results under continuous traffic | **next** |
+| 12 | Generation rebuild and atomic alias swap, shadow-evaluated | zero errors and zero empty results under continuous traffic | **done** (integration suite written, not yet run -- see note) |
 | 13 | SSO: discovery, OIDC, JIT provisioning, admin wizard | round trip against Keycloak and a real Entra tenant | pending |
 | 14 | Frontend: routes, AuthContext, login, search and ask, admin | capability-gated nav, every error state demoed | pending |
 | 15 | API keys, Redis rate limiting, concurrency caps | limits hold across two replicas | pending |
@@ -175,3 +175,36 @@ One deliberate asymmetry with the reranker: **a parser outage raises rather than
 There is no cheaper way to read a scan, so failing the job is correct -- it retries, and the
 document appears as a failed ingest. Degrading would produce exactly the silent empty document
 the routing exists to prevent.
+
+
+## Step 12: the rebuild, and what has not been run
+
+The orchestration, the two gates and the swap are complete and unit-tested (66 new tests). The
+integration suite `tests/integration/test_generation_swap.py` -- which is where the acceptance
+criterion actually lives, because "zero empty results under continuous traffic" is a property of
+how OpenSearch applies alias actions rather than of our control flow -- **has been written but
+not executed**, because the machine has no disk left for the cluster. It should be the first
+thing run once space is free:
+
+```bash
+docker compose up -d opensearch postgres
+cd backend && uv run pytest -m integration -q
+```
+
+Two bugs the unit tests caught that are worth recording, because both would have failed a real
+rebuild only after the backfill had already run:
+
+* The backfill wrote `simhash` where the mapping declares `simhash64`, and wrote it as an integer
+  where the mapping declares a keyword. Under `dynamic: strict` the first is a rejected bulk
+  item; the second is silently coerced, which is worse.
+* The parent body wrote `ordinal`, but the parent mapping renames it to `parent_ordinal` and adds
+  `child_count`. The parent index is not the chunk index minus a vector.
+
+Both were found by asserting each body's field set against the mapping itself rather than against
+the ingest path, which is now the test that guards this: `tests/unit/test_backfill_source.py`.
+
+A third thing worth recording is a design error caught while writing it. The first cursor design
+paged on the OpenSearch `_id`, which is a SHA-256 -- meaning every page would have computed a
+hash per candidate row and ordered randomly against every index the table has. Paging is now
+keyset on `(tenant_id, document_version_id, ordinal)`, and the cursor is opaque to the
+orchestrator so a source owns its own key space.
