@@ -9,6 +9,7 @@ migration, which is exactly the kind of silent omission the test in
 from __future__ import annotations
 
 from app.models.apikey import ApiKey, ApiKeyEvent
+from app.models.audit import AnswerTrace, AuditAction, AuditLog, chain_hash
 from app.models.chunk import Chunk, ChunkContext, ChunkVector, EmbeddingCache, Parent
 from app.models.document import (
     Blob,
@@ -40,8 +41,11 @@ from app.models.tenant import Tenant, TenantIndexBinding
 from app.models.user import Collection, RoleElevationGrant, User, UserCollectionScope
 
 __all__ = [
+    "AnswerTrace",
     "ApiKey",
     "ApiKeyEvent",
+    "AuditAction",
+    "AuditLog",
     "Blob",
     "Chunk",
     "ChunkContext",
@@ -75,4 +79,5 @@ __all__ = [
     "User",
     "UserCollectionScope",
     "UserIdentity",
+    "chain_hash",
 ]

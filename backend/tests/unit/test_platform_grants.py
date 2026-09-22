@@ -97,35 +97,27 @@ def test_a_content_grant_permits_content(action: OperatorAction) -> None:
 def test_a_grant_for_another_tenant_does_not_transfer() -> None:
     """A support engineer with a grant from customer A must not thereby read customer B."""
     grant = a_grant(GrantScope.CONTENT, tenant_id=OTHER_TENANT)
-    result = authorize(
-        OperatorAction.VIEW_DOCUMENT_CONTENT, operator=an_operator(), tenant_id=TENANT, grants=[grant]
-    )
+    result = authorize(OperatorAction.VIEW_DOCUMENT_CONTENT, operator=an_operator(), tenant_id=TENANT, grants=[grant])
     assert not result.allowed
 
 
 def test_another_operators_grant_does_not_transfer() -> None:
     grant = a_grant(GrantScope.CONTENT, operator_id=uuid.uuid4())
-    result = authorize(
-        OperatorAction.VIEW_DOCUMENT_CONTENT, operator=an_operator(), tenant_id=TENANT, grants=[grant]
-    )
+    result = authorize(OperatorAction.VIEW_DOCUMENT_CONTENT, operator=an_operator(), tenant_id=TENANT, grants=[grant])
     assert not result.allowed
 
 
 def test_an_expired_grant_stops_working_by_itself() -> None:
     """The property that matters. A grant someone must remember to revoke is one that stays open."""
     expired = a_grant(GrantScope.CONTENT, expires_at=datetime.now(UTC) - timedelta(minutes=1))
-    result = authorize(
-        OperatorAction.VIEW_DOCUMENT_CONTENT, operator=an_operator(), tenant_id=TENANT, grants=[expired]
-    )
+    result = authorize(OperatorAction.VIEW_DOCUMENT_CONTENT, operator=an_operator(), tenant_id=TENANT, grants=[expired])
     assert not result.allowed
 
 
 def test_a_revoked_grant_stops_working_immediately() -> None:
     """A customer who revokes access mid-incident must not have to wait for an expiry."""
     revoked = a_grant(GrantScope.CONTENT, revoked_at=datetime.now(UTC))
-    result = authorize(
-        OperatorAction.VIEW_DOCUMENT_CONTENT, operator=an_operator(), tenant_id=TENANT, grants=[revoked]
-    )
+    result = authorize(OperatorAction.VIEW_DOCUMENT_CONTENT, operator=an_operator(), tenant_id=TENANT, grants=[revoked])
     assert not result.allowed
 
 
@@ -245,11 +237,9 @@ def test_a_customer_cannot_consent_their_way_past_an_owner_only_action() -> None
 
 
 def test_impersonation_requires_a_grant_naming_one_user() -> None:
-    """"Reproduce what Alice sees" must not become "act as anyone in the tenant"."""
+    """ "Reproduce what Alice sees" must not become "act as anyone in the tenant"."""
     unscoped = a_grant(GrantScope.IMPERSONATE, impersonate_user_id=None)
-    result = authorize(
-        OperatorAction.IMPERSONATE_USER, operator=an_operator(), tenant_id=TENANT, grants=[unscoped]
-    )
+    result = authorize(OperatorAction.IMPERSONATE_USER, operator=an_operator(), tenant_id=TENANT, grants=[unscoped])
     assert not result.allowed
 
 
@@ -312,9 +302,7 @@ def test_a_deactivated_operator_can_do_nothing_even_with_a_live_grant() -> None:
 def test_an_operator_without_mfa_can_do_nothing() -> None:
     """This account can, with approval, read customer data. That makes it the highest-value
     phishing target in the product, so MFA is a gate rather than a recommendation."""
-    result = authorize(
-        OperatorAction.LIST_TENANTS, operator=an_operator(mfa_enrolled=False), grants=[]
-    )
+    result = authorize(OperatorAction.LIST_TENANTS, operator=an_operator(mfa_enrolled=False), grants=[])
     assert not result.allowed
     assert "multi-factor" in result.reason
 
@@ -371,9 +359,7 @@ def test_the_narrowest_grant_is_the_one_recorded() -> None:
 
 def test_a_permitted_action_names_the_grant_that_permitted_it() -> None:
     grant = a_grant(GrantScope.CONTENT)
-    result = authorize(
-        OperatorAction.VIEW_DOCUMENT_CONTENT, operator=an_operator(), tenant_id=TENANT, grants=[grant]
-    )
+    result = authorize(OperatorAction.VIEW_DOCUMENT_CONTENT, operator=an_operator(), tenant_id=TENANT, grants=[grant])
     assert result.grant_id == grant.id
 
 

@@ -348,3 +348,47 @@ stays false on a refusal, because that is the field a customer's security review
 
 A query string counts as content, deliberately: what someone asked is often about themselves or a
 colleague.
+
+
+## Step 17: observability, audit and the SharePoint connector
+
+The acceptance criterion is tested in one place rather than split across two files that each
+assume the other: `test_a_restricted_file_is_invisible_to_a_non_member_end_to_end` runs the
+connector to produce an ACL and then asserts `dsl.build_filter` turns a non-member's groups into
+a clause that does not match it.
+
+Why SharePoint first: Entra is already a required identity provider, so the group object ids in
+`driveItem.permissions` are the *same* ids arriving in the login token's `groups` claim.
+Permission mirroring is nearly free and exactly correct. No other connector has that property —
+with Confluence or Drive we would be mapping one directory's notion of a group onto another's,
+and every mapping error is a document visible to the wrong person.
+
+Three connector decisions:
+
+* **Permissions cached per folder; item-level calls only where `driveItem.shared` marks a broken
+  inheritance.** A 100,000-file library answered item by item exhausts the Graph throttling
+  budget — which does not merely slow the sync, it returns 429s to every other call the
+  application makes for that tenant.
+* **An item whose permissions cannot be read is not indexed.** Not indexed with a guessed ACL,
+  and not with none (which many systems treat as public). A document nobody can find is a support
+  ticket; one visible to the wrong person is a breach.
+* **Group ids are never resolved to display names.** Names are mutable and non-unique, so storing
+  one would mean a renamed group silently changes who can read a document.
+
+A bug the tests found: `SyncStats.degraded` compared against the module constant rather than the
+connector's configured budget, so a deployment that tuned the budget *down* would never report a
+partial sync — the one configuration where partial syncs are most likely.
+
+Observability is instrumented once with the OTel SDK and exported over OTLP; nothing in `app/`
+imports a vendor SDK, so a BYOC customer drops Langfuse and loses nothing structural. Attribute
+filtering denies by default in both directions: content attributes need the tenant's opt-in, and
+an *unclassified* attribute is dropped outright — because the way customer data reaches a
+third-party tool is almost never deliberate, it is someone adding `set_attribute("doc", document)`
+while debugging and not removing it.
+
+`audit_logs` is append-only with an optional hash chain, so "the vendor could have edited it" is
+answerable with a grant table rather than a promise. `answer_traces` is the product's own
+customer-facing record, deliberately not dependent on an observability vendor being reachable.
+
+**Not verified:** the live round trip against a real Microsoft Graph tenant. Every Graph response
+shape is tested against a mock transport; what remains untested is Graph's own behaviour.
