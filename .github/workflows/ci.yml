@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      # The offline triple. No paid API, no model download, deterministic output -- which is what
+      # lets the retrieval evaluation run on every pull request instead of nightly-and-ignored.
+      LLM_PROVIDER: none
+      EMBEDDING_PROVIDER: hashing
+      RERANKER_PROVIDER: identity
+      CONTEXTUALIZER: template
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install
+        run: uv sync --frozen
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy app
+
+      - name: Unit tests
+        run: uv run pytest -m "not integration and not evals" -q --cov=app --cov-report=term-missing
+
+  integration:
+    name: Integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: erp
+          POSTGRES_PASSWORD: erp
+          POSTGRES_DB: erp_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U erp"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+
+      opensearch:
+        image: opensearchproject/opensearch:2.19.0
+        env:
+          discovery.type: single-node
+          DISABLE_SECURITY_PLUGIN: "true"
+          DISABLE_INSTALL_DEMO_CONFIG: "true"
+          OPENSEARCH_JAVA_OPTS: -Xms1g -Xmx1g
+        ports: ["9200:9200"]
+        options: >-
+          --health-cmd "curl -fs http://localhost:9200/_cluster/health || exit 1"
+          --health-interval 10s --health-timeout 5s --health-retries 30
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://erp:erp@localhost:5432/erp_test
+      OPENSEARCH_URL: http://localhost:9200
+      LLM_PROVIDER: none
+      EMBEDDING_PROVIDER: hashing
+      RERANKER_PROVIDER: identity
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - run: uv sync --frozen
+
+      # The migration must apply cleanly to the database we actually ship on, and must leave no
+      # drift against the models. `alembic check` is the guard for the second half.
+      - name: Migrations apply and match the models
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
+
+      - name: App serves an OpenAPI schema
+        run: uv run python -c "from app.main import create_app; s=create_app().openapi(); print(len(s['paths']), 'paths')"
+
+      - name: Integration and security tests
+        run: uv run pytest -m integration -q
+
+      # Retrieval quality is a build gate, not a dashboard someone remembers to look at. The
+      # runner fails on an absolute threshold breach *and* on a >2 point regression against the
+      # merge-base baseline -- thresholds catch collapses, the relative gate catches slow bleed.
+      - name: Retrieval evaluation and ablation table
+        run: uv run python -m app.cli eval --ablate --fail-under-thresholds
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    if: hashFiles('frontend/package.json') != ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test -- --run
+      - run: npm run build

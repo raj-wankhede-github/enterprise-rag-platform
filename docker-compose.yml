@@ -1,0 +1,199 @@
+name: enterprise-rag
+
+# A scaled-down profile of the production topology, not a different architecture.
+#
+# Production runs 3+ OpenSearch data nodes at 31 GB heap behind dedicated masters, managed
+# Postgres with a read replica, S3, and autoscaled model/parser pools. Everything below is the
+# same set of services with single-node sizing; the differences are environment variables, never
+# structure. Optional services sit behind profiles so a developer starts only what they need:
+#
+#   docker compose up -d                       core: db, opensearch, redis, migrate, api, worker
+#   docker compose --profile models up -d      + ONNX embedder/reranker
+#   docker compose --profile parse up -d       + Docling parser (scans, tables)
+#   docker compose --profile dev up -d         + Keycloak, MinIO, Dashboards, Mailpit
+
+x-backend: &backend
+  build:
+    context: ./backend
+  environment: &backend-env
+    ENVIRONMENT: ${ENVIRONMENT:-local}
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-erp}:${POSTGRES_PASSWORD:-erp}@db:5432/${POSTGRES_DB:-erp}
+    OPENSEARCH_URL: ${OPENSEARCH_URL:-http://opensearch:9200}
+    OPENSEARCH_VERIFY_CERTS: ${OPENSEARCH_VERIFY_CERTS:-false}
+    REDIS_URL: redis://:${REDIS_PASSWORD:-erp}@redis:6379/0
+    JWT_SECRET: ${JWT_SECRET:-local-development-secret-change-me-32chars}
+    COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    # The offline triple. Real providers are opt-in, so a fresh clone costs nothing to run.
+    LLM_PROVIDER: ${LLM_PROVIDER:-none}
+    EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-hashing}
+    RERANKER_PROVIDER: ${RERANKER_PROVIDER:-identity}
+    CONTEXTUALIZER: ${CONTEXTUALIZER:-template}
+    MODELS_SERVICE_URL: ${MODELS_SERVICE_URL:-}
+    PARSER_SERVICE_URL: ${PARSER_SERVICE_URL:-}
+  depends_on:
+    db:
+      condition: service_healthy
+    opensearch:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-erp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-erp}
+      POSTGRES_DB: ${POSTGRES_DB:-erp}
+      # Deterministic collation so ORDER BY on titles behaves identically everywhere.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    # 5433 on the host: the sibling AI-Agent-Customer-Support-RAG stack owns 5432.
+    ports: ["${POSTGRES_PORT:-5433}:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-erp} -d ${POSTGRES_DB:-erp}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  opensearch:
+    build: ./deploy/opensearch
+    environment:
+      discovery.type: single-node
+      cluster.name: erp-local
+      node.name: os1
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      # Production uses 31 GB (just under the compressed-oops threshold) on dedicated data nodes.
+      OPENSEARCH_JAVA_OPTS: "${OPENSEARCH_JAVA_OPTS:--Xms1g -Xmx1g -XX:+UseSerialGC}"
+      bootstrap.memory_lock: "true"
+      action.destructive_requires_name: "true"
+      # Developer machines run close to full. Without this, OpenSearch silently flips every index
+      # to read_only_allow_delete at the 95% flood stage and writes fail with a ClusterBlockException
+      # that names nothing useful. Never set in production, where the watermarks are the alarm.
+      cluster.routing.allocation.disk.threshold_enabled: "${OS_DISK_WATERMARKS_DISABLED:-false}"
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    ports: ["${OPENSEARCH_PORT:-9200}:9200"]
+    volumes:
+      - osdata:/usr/share/opensearch/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "curl -fs 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=2s' || exit 1"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:-erp}
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --appendonly
+      - "no"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD:-erp}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # Migrations are an explicit one-shot step, never run at app startup: two replicas starting
+  # together would otherwise migrate concurrently.
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  api:
+    <<: *backend
+    command: ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    ports: ["${API_PORT:-8001}:8000"]
+    depends_on:
+      db:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.workers.ingestion_worker"]
+    depends_on:
+      db:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # --- optional services ---------------------------------------------------------------------
+
+  models:
+    profiles: [models]
+    build: ./deploy/models
+    environment:
+      RERANKER_MODEL: ${RERANKER_MODEL:-BAAI/bge-reranker-base}
+      OMP_WAIT_POLICY: PASSIVE
+    ports: ["${MODELS_PORT:-8002}:8000"]
+    restart: unless-stopped
+
+  parser:
+    profiles: [parse]
+    build: ./deploy/parser
+    ports: ["${PARSER_PORT:-8003}:8000"]
+    restart: unless-stopped
+
+  keycloak:
+    profiles: [dev]
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_USER:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_PASSWORD:-admin}
+    volumes:
+      - ./deploy/keycloak-dev:/opt/keycloak/data/import:ro
+    ports: ["${KEYCLOAK_PORT:-8081}:8080"]
+
+  minio:
+    profiles: [dev]
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-minioadmin}
+    volumes: [miniodata:/data]
+    ports: ["9000:9000", "9001:9001"]
+
+  dashboards:
+    profiles: [dev]
+    image: opensearchproject/opensearch-dashboards:2.19.0
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    ports: ["5601:5601"]
+    depends_on:
+      opensearch:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  osdata:
+  miniodata:
