@@ -155,8 +155,25 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      # uv is here for one test: the capability table the frontend renders from must equal the
+      # backend enum, and that test regenerates it rather than comparing two checked-in copies.
+      # Without uv it skips silently, which would make the one check that matters a no-op in the
+      # one place it matters.
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: uv sync --frozen
+        working-directory: backend
+
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test -- --run
       - run: npm run build
+
+      - name: Fail if the generated capability table is stale
+        run: |
+          uv run python -m app.cli capabilities > /tmp/capabilities.ts
+          diff -u ../frontend/src/auth/capabilities.generated.ts /tmp/capabilities.ts
+        working-directory: backend

@@ -247,3 +247,32 @@ clearing cookies discarded the `Set-Cookie` headers, because the exception handl
 response. A failed refresh therefore left the dead token in the browser and every subsequent
 request retried with it — a loop the user could not escape without clearing site data. `AppError`
 now carries `clear_cookies` and the handler applies it.
+
+
+## Step 14: the frontend
+
+React 19, TypeScript 5.9, Vite 7, Tailwind 4, Vitest. 56 tests; lint, typecheck and production
+build all clean. Routes are code-split; the entry bundle is 86 KB gzipped.
+
+Four decisions worth keeping:
+
+* **The capability table is generated from the backend enum** (`uv run python -m app.cli
+  capabilities`) and a test regenerates it rather than comparing two checked-in copies — two
+  copies drift together and prove nothing. CI installs uv in the frontend job for that one test,
+  because the version that skips silently would be a no-op exactly where it matters.
+* **One refresh at a time.** A page firing six requests on mount would otherwise start six
+  refreshes; five present a token the first has already rotated, the backend correctly reads that
+  as replay, and the session family is revoked. The user is signed out of every device by loading
+  a page — and the backend is behaving exactly as designed, so nothing on that side reports a
+  problem. The single-flight in `api/client.ts` is what makes refresh-token reuse detection
+  compatible with a real application.
+* **`/api/auth/me`, not `/api/auth/refresh`, for the session probe.** Probing via refresh would
+  burn a rotation per page load, and two tabs opened at once would each present a token the other
+  had rotated.
+* **Abstention is rendered as an answer, not an error.** No alert role, no red. Styling the
+  honest refusal as a malfunction teaches users to distrust it, and the pressure that follows is
+  to make the system answer anyway — which is the failure the product exists to avoid.
+
+ESLint enforces two of these structurally: `dangerouslySetInnerHTML` is banned outright (a remote
+image in a retrieved passage is the classic exfiltration channel) and `localStorage` /
+`sessionStorage` are banned in production code, since the session lives in HttpOnly cookies.

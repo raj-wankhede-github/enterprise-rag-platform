@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+/* Retrieved document text is rendered inside <mark> for highlights. The default yellow is
+   loud enough to read as an error state, which is the wrong signal for "this matched". */
+mark {
+  background-color: rgb(254 249 195);
+  color: inherit;
+  padding: 0 0.1em;
+  border-radius: 2px;
+}

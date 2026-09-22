@@ -217,6 +217,33 @@ async def login(
     return _session_response(outcome.user, session)
 
 
+@router.get("/me", response_model=SessionResponse)
+async def me(request: Request) -> SessionResponse:
+    """The current principal, for the frontend to render against.
+
+    Deliberately not ``/refresh``. A page load that rotated the refresh token would burn one
+    rotation per load, and two tabs opened at once would each present a token the other had
+    already rotated -- which the backend correctly reads as replay and answers by revoking the
+    session family. The user would be signed out of everything by opening a second tab.
+
+    The principal is the one the middleware loaded from Postgres this request, not the token's
+    claims, so a demotion or deactivation is reflected here within the principal cache window.
+    """
+    principal = getattr(request.state, "principal", None)
+    if principal is None:
+        raise AuthenticationError("Your session has ended. Please sign in again.")
+
+    return SessionResponse(
+        user_id=principal.user_id or uuid.UUID(int=0),
+        tenant_slug=getattr(request.state, "tenant_slug", ""),
+        email=principal.email,
+        display_name=principal.display_name,
+        role=str(principal.role),
+        capabilities=sorted(str(capability) for capability in principal.capabilities),
+        expires_at=principal.expires_at or datetime.now(UTC) + timedelta(minutes=10),
+    )
+
+
 @router.post("/refresh", response_model=SessionResponse)
 async def refresh(request: Request, response: Response, service: ServiceDep, keys: KeysDep) -> SessionResponse:
     """Exchange the refresh cookie for a new pair.

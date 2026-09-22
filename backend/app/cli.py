@@ -213,7 +213,14 @@ def main(argv: list[str] | None = None) -> int:
         help="skip the shadow evaluation. Promotion is then refused -- this is for dry runs only.",
     )
 
+    sub.add_parser("capabilities", help="emit the frontend capability table")
+
     args = parser.parse_args(argv)
+    if args.command == "capabilities":
+        from app.capabilities_codegen import render
+
+        print(render(), end="")
+        return 0
     if args.command == "eval":
         return _evaluate(args)
     if args.command == "rebuild":
