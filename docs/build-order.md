@@ -15,8 +15,8 @@ after step 6 ships without the ablation table showing it earned its latency.
 | 7 | Answer path: assembly, extractive generator, deterministic verification | citation-support and abstention metrics appear in the table | **done** -- made_up 0.300 -> 0.200, `cite_ok` in the table |
 | 8 | `models` container, cross-encoder reranker, `rerank_bench.py` | a real nDCG delta, p95 within budget | **done** -- nDCG@10 0.832 -> 0.895 for +12 ms |
 | 9 | Query understanding: rules, fast path, then one LLM call | fast path p95 under 60 ms | **done** -- same quality, lower p95 |
-| 10 | Contextual retrieval: template, then LLM with prompt caching | `+contextual` row, measured cost per 1k chunks | **next** |
-| 11 | `parser` container (Docling), OCR, tables | scanned-PDF and table strata pass | pending |
+| 10 | Contextual retrieval: template, then LLM with prompt caching | `+contextual` row, measured cost per 1k chunks | **done** |
+| 11 | `parser` container (Docling), OCR, tables | scanned-PDF and table strata pass | **next** |
 | 12 | Generation rebuild and atomic alias swap, shadow-evaluated | zero errors and zero empty results under continuous traffic | pending |
 | 13 | SSO: discovery, OIDC, JIT provisioning, admin wizard | round trip against Keycloak and a real Entra tenant | pending |
 | 14 | Frontend: routes, AuthContext, login, search and ask, admin | capability-gated nav, every error state demoed | pending |

@@ -90,3 +90,21 @@ def prefixed(context_line: str, text: str) -> str:
     """
     line = context_line.strip()
     return f"{line}\n\n{text}" if line else text
+
+
+def build_contextualizer(settings: object, provider: object | None = None) -> Contextualizer:
+    """Select a contextualiser from configuration.
+
+    ``llm`` without an available provider falls back to the template rather than failing to
+    start. Contextual retrieval is a quality stage: a missing key should cost a few points of
+    recall with a log line, not prevent ingestion entirely.
+    """
+    kind = getattr(settings, "contextualizer", "template")
+    if kind == "llm" and provider is not None and getattr(provider, "available", False):
+        from app.ingestion.llm_contextualize import LLMContextualizer
+
+        return LLMContextualizer(
+            provider,  # type: ignore[arg-type]
+            batch_size=int(getattr(settings, "contextualize_batch_size", 20)),
+        )
+    return TemplateContextualizer()
