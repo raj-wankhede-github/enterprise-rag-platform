@@ -67,7 +67,9 @@ services:
       DISABLE_SECURITY_PLUGIN: "true"
       DISABLE_INSTALL_DEMO_CONFIG: "true"
       # Production uses 31 GB (just under the compressed-oops threshold) on dedicated data nodes.
-      OPENSEARCH_JAVA_OPTS: "${OPENSEARCH_JAVA_OPTS:--Xms1g -Xmx1g -XX:+UseSerialGC}"
+      # Heap size only: the image already selects G1 in its jvm.options, and adding a second
+      # collector here makes the JVM refuse to start with "Multiple garbage collectors selected".
+      OPENSEARCH_JAVA_OPTS: "${OPENSEARCH_JAVA_OPTS:--Xms1g -Xmx1g}"
       bootstrap.memory_lock: "true"
       action.destructive_requires_name: "true"
       # Developer machines run close to full. Without this, OpenSearch silently flips every index
