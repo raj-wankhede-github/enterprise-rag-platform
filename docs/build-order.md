@@ -16,8 +16,8 @@ after step 6 ships without the ablation table showing it earned its latency.
 | 8 | `models` container, cross-encoder reranker, `rerank_bench.py` | a real nDCG delta, p95 within budget | **done** -- nDCG@10 0.832 -> 0.895 for +12 ms |
 | 9 | Query understanding: rules, fast path, then one LLM call | fast path p95 under 60 ms | **done** -- same quality, lower p95 |
 | 10 | Contextual retrieval: template, then LLM with prompt caching | `+contextual` row, measured cost per 1k chunks | **done** |
-| 11 | `parser` container (Docling), OCR, tables | scanned-PDF and table strata pass | **next** |
-| 12 | Generation rebuild and atomic alias swap, shadow-evaluated | zero errors and zero empty results under continuous traffic | pending |
+| 11 | `parser` container (Docling), OCR, tables | scanned-PDF and table strata pass | **done** (container not built locally -- see note) |
+| 12 | Generation rebuild and atomic alias swap, shadow-evaluated | zero errors and zero empty results under continuous traffic | **next** |
 | 13 | SSO: discovery, OIDC, JIT provisioning, admin wizard | round trip against Keycloak and a real Entra tenant | pending |
 | 14 | Frontend: routes, AuthContext, login, search and ask, admin | capability-gated nav, every error state demoed | pending |
 | 15 | API keys, Redis rate limiting, concurrency caps | limits hold across two replicas | pending |
@@ -155,3 +155,23 @@ Two bugs the tests caught, both of which would have been silent:
 The eval runner now calls the real planner instead of the local regex that approximated it.
 Measuring an approximation of the shipping path is how an evaluation drifts away from the system
 it claims to describe.
+
+
+## Step 11: the parser, and a note on what was not verified
+
+The Docling client, the container and the routing are written and unit-tested. **The container
+was not built or run on this machine** -- the Docker VHDX had grown to 57 GB and filled the disk,
+and the Docling image (torch, vision models, OCR language packs) is the largest in the stack by
+a wide margin. So the mapping from Docling's output to `ExtractedDocument` is tested against
+recorded response shapes rather than against a live parser, and that distinction is worth
+keeping in mind: it verifies the contract, not the parser's fidelity.
+
+The routing is the part that matters most, and it is fully tested. A scanned PDF sent to the
+cheap loader produces a document of empty chunks that indexes cleanly and retrieves nothing --
+an ingest that succeeds and a document that never comes back from a search. `chars_per_page` is
+what catches it.
+
+One deliberate asymmetry with the reranker: **a parser outage raises rather than degrading.**
+There is no cheaper way to read a scan, so failing the job is correct -- it retries, and the
+document appears as a failed ingest. Degrading would produce exactly the silent empty document
+the routing exists to prevent.

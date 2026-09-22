@@ -52,10 +52,21 @@ def probe(blob: bytes, filename: str) -> DocumentProbe:
 
 
 def default_registry() -> LoaderRegistry:
-    """Cheap loaders only.
+    """Cheap loaders only: no model dependency, no network call.
 
-    The Docling client registers itself on top when ``PARSER_SERVICE_URL`` is configured, so a
-    deployment without the parser container still handles text formats and fails clearly on
-    everything else rather than importing a dependency it does not have.
+    This is what CI runs, and what a deployment with the parse profile off runs. Layout-heavy
+    formats then fail with a clean "no loader handles this" rather than an ImportError at
+    startup -- a missing optional service must not prevent the API booting.
     """
     return LoaderRegistry([PlainTextLoader(), MarkdownLoader(), HTMLLoader()])
+
+
+def build_registry(settings: object) -> LoaderRegistry:
+    """The cheap loaders, plus the parser service when one is configured."""
+    registry = default_registry()
+    parser_url = getattr(settings, "parser_service_url", None)
+    if parser_url:
+        from app.ingestion.loaders.docling_client import DoclingClient
+
+        registry.register(DoclingClient(str(parser_url)))
+    return registry

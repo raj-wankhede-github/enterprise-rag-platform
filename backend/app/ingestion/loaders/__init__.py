@@ -7,7 +7,7 @@ from app.ingestion.loaders.base import (
     DocumentLoader,
     LoaderRegistry,
 )
-from app.ingestion.loaders.registry import default_registry, probe, sniff_mime
+from app.ingestion.loaders.registry import build_registry, default_registry, probe, sniff_mime
 from app.ingestion.loaders.text import HTMLLoader, MarkdownLoader, PlainTextLoader
 
 __all__ = [
@@ -17,6 +17,7 @@ __all__ = [
     "LoaderRegistry",
     "MarkdownLoader",
     "PlainTextLoader",
+    "build_registry",
     "default_registry",
     "probe",
     "sniff_mime",
