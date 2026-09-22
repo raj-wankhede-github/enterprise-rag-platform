@@ -1,0 +1,139 @@
+{
+  "_comment": [
+    "Metadata for the evaluation corpus. Authored rather than scraped: no licensing question,",
+    "no PII, and we control ground truth. The corpus deliberately contains a superseded/",
+    "replacement policy pair, a restricted document, table-only facts, and identifiers, so the",
+    "strata in golden.jsonl have something real to test against."
+  ],
+  "documents": [
+    {
+      "slug": "travel-policy",
+      "title": "Travel and Expense Policy",
+      "doc_type": "policy",
+      "effective_from": "2025-01-01",
+      "visibility_rank": 10,
+      "authority_rank": 0.9,
+      "is_superseded": false,
+      "supersedes": ["travel-policy-2023"]
+    },
+    {
+      "slug": "travel-policy-2023",
+      "title": "Travel and Expense Policy (2023)",
+      "doc_type": "policy",
+      "effective_from": "2023-01-01",
+      "effective_to": "2024-12-31",
+      "visibility_rank": 10,
+      "authority_rank": 0.9,
+      "is_superseded": true,
+      "superseded_by": ["travel-policy"]
+    },
+    {
+      "slug": "leave-policy",
+      "title": "Leave and Absence Policy",
+      "doc_type": "policy",
+      "effective_from": "2025-03-01",
+      "visibility_rank": 10,
+      "authority_rank": 0.9,
+      "is_superseded": false
+    },
+    {
+      "slug": "security-policy",
+      "title": "Information Security Policy",
+      "doc_type": "policy",
+      "effective_from": "2025-02-01",
+      "visibility_rank": 10,
+      "authority_rank": 0.9,
+      "is_superseded": false
+    },
+    {
+      "slug": "procurement-policy",
+      "title": "Procurement Policy",
+      "doc_type": "policy",
+      "effective_from": "2025-01-01",
+      "visibility_rank": 10,
+      "authority_rank": 0.9,
+      "is_superseded": false
+    },
+    {
+      "slug": "remote-work-policy",
+      "title": "Remote Work Policy",
+      "doc_type": "policy",
+      "effective_from": "2025-04-01",
+      "visibility_rank": 10,
+      "authority_rank": 0.9,
+      "is_superseded": false
+    },
+    {
+      "slug": "onboarding-handbook",
+      "title": "Onboarding Handbook",
+      "doc_type": "handbook",
+      "effective_from": "2024-11-01",
+      "visibility_rank": 10,
+      "authority_rank": 0.5,
+      "is_superseded": false
+    },
+    {
+      "slug": "data-retention-schedule",
+      "title": "Data Retention Schedule",
+      "doc_type": "schedule",
+      "effective_from": "2025-01-01",
+      "visibility_rank": 20,
+      "authority_rank": 0.9,
+      "is_superseded": false
+    },
+    {
+      "slug": "incident-runbook",
+      "title": "Production Incident Runbook",
+      "doc_type": "runbook",
+      "effective_from": "2025-02-01",
+      "visibility_rank": 20,
+      "authority_rank": 0.6,
+      "is_superseded": false
+    },
+    {
+      "slug": "supplier-directory",
+      "title": "Approved Supplier Directory",
+      "doc_type": "directory",
+      "effective_from": "2025-07-01",
+      "visibility_rank": 20,
+      "authority_rank": 0.5,
+      "is_superseded": false
+    },
+    {
+      "slug": "code-of-conduct",
+      "title": "Code of Conduct",
+      "doc_type": "policy",
+      "effective_from": "2024-01-01",
+      "visibility_rank": 10,
+      "authority_rank": 0.9,
+      "is_superseded": false
+    },
+    {
+      "slug": "expenses-faq",
+      "title": "Expenses: Frequently Asked Questions",
+      "doc_type": "faq",
+      "effective_from": "2025-06-01",
+      "visibility_rank": 10,
+      "authority_rank": 0.3,
+      "is_superseded": false
+    },
+    {
+      "slug": "meeting-rooms",
+      "title": "Meeting Room Booking",
+      "doc_type": "guide",
+      "effective_from": "2024-09-01",
+      "visibility_rank": 10,
+      "authority_rank": 0.3,
+      "is_superseded": false
+    },
+    {
+      "slug": "board-compensation",
+      "title": "Board Compensation Framework",
+      "doc_type": "policy",
+      "effective_from": "2025-01-01",
+      "visibility_rank": 40,
+      "authority_rank": 0.9,
+      "is_superseded": false
+    }
+  ]
+}

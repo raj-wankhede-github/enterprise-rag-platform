@@ -117,9 +117,28 @@ jobs:
 
       # Retrieval quality is a build gate, not a dashboard someone remembers to look at. The
       # runner fails on an absolute threshold breach *and* on a >2 point regression against the
-      # merge-base baseline -- thresholds catch collapses, the relative gate catches slow bleed.
+      # committed baseline -- thresholds catch collapses, the relative gate catches slow bleed.
+      # Runs in ~20s on the offline triple, which is what keeps it on every PR rather than
+      # nightly-and-ignored.
+      #
+      # Deliberately NOT piped through `tee`: GitHub's default shell is `bash -e`, without
+      # `pipefail`, so a pipeline takes the exit code of its last command. `eval | tee` would
+      # report success whenever tee succeeded -- a quality gate that silently never fails.
       - name: Retrieval evaluation and ablation table
-        run: uv run python -m app.cli eval --ablate --fail-under-thresholds
+        run: |
+          set -o pipefail
+          uv run python -m app.cli eval --ablate --fail-under-thresholds --baseline app/evals/baseline.json > eval.txt
+        continue-on-error: false
+
+      - name: Publish the ablation table to the run summary
+        if: always()
+        run: |
+          {
+            echo '## Retrieval ablation'
+            echo '```'
+            cat eval.txt 2>/dev/null || echo 'the evaluation did not produce a table'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   frontend:
     name: Frontend

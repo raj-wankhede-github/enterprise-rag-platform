@@ -23,7 +23,8 @@ built on top of it in the order set out in [`docs/build-order.md`](docs/build-or
 | Ingestion pipeline: loaders, chunker, contextualiser, embedder | done, 98% covered |
 | Four retrieval legs + `_msearch` + RRF + priors | done, verified on a live cluster |
 | Abstention: evidence gate and the "I don't know" contract | done |
-| Evaluation harness + ablation table | next, before any tuning |
+| Evaluation harness, golden set, ablation table, CI gate | done, gating every PR in ~20s |
+| Answer assembly, generation, citation verification | next |
 | SSO, connectors, admin UI | later |
 
 ## Quick start
@@ -112,7 +113,9 @@ docs/          decisions, build order
 ```bash
 uv run pytest -q                  # unit: fast, hermetic, deterministic
 uv run pytest -m integration -q   # needs Postgres + OpenSearch
-uv run python -m app.cli eval --ablate
+uv run python -m app.cli eval --ablate                 # the ablation table
+uv run python bench/abstention_calibration.py         # re-derive the abstention threshold
+uv run python bench/stemming_bench.py                 # re-derive the stemmer choice
 ```
 
 Five test suites matter more than the rest and must never be marked `xfail`:

@@ -17,8 +17,10 @@ Three signals, in increasing cost:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Final
 
 from app.answer.types import AbstentionReason, NearMiss
 from app.retrieval.types import Candidate
@@ -103,13 +105,29 @@ _QUESTION_WORDS: frozenset[str] = frozenset(
         "tell",
         "show",
         "give",
+        "given",
         "explain",
         "describe",
         "many",
         "much",
         "long",
+        "have",
+        "has",
+        "had",
+        "get",
+        "got",
+        "need",
+        "want",
+        "allowed",
+        "entitled",
+        "apply",
+        "applies",
     }
 )
+
+#: An identifier in the question is a request about that specific thing. Matching the pattern
+#: used by the retrieval planner so the two agree on what counts as one.
+_IDENTIFIER_RE: Final[re.Pattern[str]] = re.compile(r"[A-Z]{2,5}[-_]\d{2,}(?:[-_]\d+)*|\d+\.\d+(?:\.\d+)+")
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,15 +145,26 @@ class EvidenceThresholds:
     #: How many candidates must clear the bar. One lucky hit is not a corpus that knows the answer.
     min_supporting: int = 1
     #: Fraction of the question's distinctive terms that must appear somewhere in the evidence.
-    #: 0.6 rather than 0.5 because a clear majority is the point: at exactly half, a question
-    #: like "what is the per diem rate for Reykjavik" passes on "per diem" alone while both the
-    #: metric asked for and the place asked about are absent -- which is precisely the shape of
-    #: evidence a model will happily fill in.
     #:
-    #: The errors here are asymmetric. Over-abstaining is visible, annoying and trivially fixed
-    #: by the user rephrasing; under-abstaining produces a confident wrong number that nobody
-    #: notices until it matters. So this leans toward abstention, and gets calibrated properly
-    #: against the golden set at build step 6 rather than by argument now.
+    #: Calibrated, not chosen. ``bench/abstention_calibration.py`` sweeps this against the golden
+    #: set (51 answerable, 10 unanswerable) and the distributions overlap:
+    #:
+    #:     threshold  refused_ok  made_up  wrongly_refused
+    #:          0.50           5        5                1
+    #:          0.60           7        3                4     <- shipped
+    #:          0.70           8        2               12
+    #:          0.85          10        0               20
+    #:
+    #: 0.60 is the knee. Going to 0.70 buys one fewer invented answer at the cost of eight more
+    #: refused real ones; reaching zero invented answers means refusing 39% of questions the
+    #: corpus can actually answer, which is a system nobody would use.
+    #:
+    #: The honest conclusion is that **coverage alone cannot close this gap**. This gate is the
+    #: cheap pre-filter, not the whole abstention story: the residue is questions whose topic
+    #: terms are all present and only the asked-for *value* is absent ("the per diem for grade
+    #: D", where the table lists A, B and C). No lexical measure can see that. Citation
+    #: verification at build step 7 can, because a model required to cite a chunk stating grade D
+    #: will not find one.
     min_term_coverage: float = 0.6
     #: How many near misses to show the user when abstaining.
     max_near_misses: int = 3
@@ -163,13 +192,7 @@ def distinctive_terms(question: str) -> tuple[str, ...]:
     frequently the entire question, and dropping them as short tokens is how a coverage check
     concludes that a document about travel answers "what is the limit".
     """
-    result: list[str] = []
-    for token in tokens(question):
-        if token in _QUESTION_WORDS:
-            continue
-        if len(token) <= 2 and not any(character.isdigit() for character in token):
-            continue
-        result.append(token)
+    result: list[str] = [token for token in tokens(question) if token not in _QUESTION_WORDS]
     return tuple(dict.fromkeys(result))
 
 
@@ -190,6 +213,17 @@ def _coverage(terms: Sequence[str], candidates: Sequence[Candidate]) -> tuple[fl
 
     missing = tuple(term for term in terms if term not in haystack)
     return (len(terms) - len(missing)) / len(terms), missing
+
+
+def _missing_identifiers(question: str, candidates: Sequence[Candidate]) -> tuple[str, ...]:
+    """Identifiers named in the question that appear nowhere in the evidence."""
+    named = _IDENTIFIER_RE.findall(question)
+    if not named:
+        return ()
+    haystack = " ".join(
+        [c.text for c in candidates] + [c.title for c in candidates] + [c.context_line or "" for c in candidates]
+    ).casefold()
+    return tuple(item for item in dict.fromkeys(named) if item.casefold() not in haystack)
 
 
 def _near_misses(candidates: Sequence[Candidate], limit: int) -> tuple[NearMiss, ...]:
@@ -253,6 +287,21 @@ def assess(
             near_misses=_near_misses(supporting, limits.max_near_misses),
             term_coverage=0.0,
             missing_terms=(),
+            top_score=top_score,
+        )
+
+    # An identifier the question names and the evidence does not contain is not "partial
+    # coverage" -- it is a miss. "How long is the contract with SUP-7777" scored 0.67 because
+    # the tokenizer split the code and "sup" matched SUP-4471, which is a different supplier.
+    missing_identifiers = _missing_identifiers(question, supporting)
+    if missing_identifiers:
+        return EvidenceAssessment(
+            sufficient=False,
+            reason=AbstentionReason.INCOMPLETE_EVIDENCE,
+            supporting=(),
+            near_misses=_near_misses(supporting, limits.max_near_misses),
+            term_coverage=0.0,
+            missing_terms=missing_identifiers,
             top_score=top_score,
         )
 
