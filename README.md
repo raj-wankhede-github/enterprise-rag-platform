@@ -19,7 +19,9 @@ built on top of it in the order set out in [`docs/build-order.md`](docs/build-or
 | RRF fusion | done, unit-tested |
 | Document identity, dedup, versioning policy | done, fully specified by tests |
 | Data model + ORM tenant guards | done |
-| Ingestion pipeline, OpenSearch indices, retrieval legs | next |
+| OpenSearch mappings, analysis chain, generation fingerprinting | done, verified on a live cluster |
+| Ingestion pipeline: loaders, chunker, contextualiser, embedder | done, 98% covered |
+| Retrieval legs + `_msearch` | next |
 | Evaluation harness + ablation table | after that, before any tuning |
 | SSO, connectors, admin UI | later |
 
@@ -118,6 +120,9 @@ Three test suites matter more than the rest and must never be marked `xfail`:
 - `tests/security/test_dsl_isolation.py` — every query permutation carries exactly one tenant
   term, and the visibility range is an `lte` on the principal's rank.
 - `tests/unit/test_versioning.py` — the executable specification of what a re-upload does.
+- `tests/integration/test_ingest_to_search.py` — two tenants holding documents with the same
+  distinctive tokens, so only the filter can tell them apart. Covers BM25 and kNN isolation, hit
+  counts, visibility rank, and a stale generation seeing nothing.
 
 ## License
 
