@@ -114,7 +114,7 @@ uv run pytest -m integration -q   # needs Postgres + OpenSearch
 uv run python -m app.cli eval --ablate
 ```
 
-Three test suites matter more than the rest and must never be marked `xfail`:
+Four test suites matter more than the rest and must never be marked `xfail`:
 
 - `tests/unit/test_capabilities.py` — the four-role chain stays a chain.
 - `tests/security/test_dsl_isolation.py` — every query permutation carries exactly one tenant
