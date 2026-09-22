@@ -12,8 +12,8 @@ after step 6 ships without the ablation table showing it earned its latency.
 | 4 | Ingestion v1 + dedup and versioning | identical re-upload creates no version; edited re-upload re-embeds under 5% of chunks; case 4 returns 409 | **done** (loaders, chunker, contextualiser, embedder, reuse) |
 | 5 | Retrieval: four legs and one `_msearch` | candidates carry per-leg ranks | **done** |
 | 6 | **Eval harness, golden set, ablation runner, CI gate** | the table prints in under four minutes | **done** -- 20s, gating CI |
-| 7 | Answer path: assembly, extractive generator, deterministic verification | citation-support and abstention metrics appear in the table | **next** -- abstention gate done; citation verification is what closes the remaining 30% made-up rate |
-| 8 | `models` container, cross-encoder reranker, `rerank_bench.py` | a real nDCG delta, p95 within budget | pending |
+| 7 | Answer path: assembly, extractive generator, deterministic verification | citation-support and abstention metrics appear in the table | **done** -- made_up 0.300 -> 0.200, `cite_ok` in the table |
+| 8 | `models` container, cross-encoder reranker, `rerank_bench.py` | a real nDCG delta, p95 within budget | **next** -- the cross-encoder also becomes the entailment scorer that should close the last 0.200 |
 | 9 | Query understanding: rules, fast path, then one LLM call | fast path p95 under 60 ms | pending |
 | 10 | Contextual retrieval: template, then LLM with prompt caching | `+contextual` row, measured cost per 1k chunks | pending |
 | 11 | `parser` container (Docling), OCR, tables | scanned-PDF and table strata pass | pending |
@@ -61,3 +61,33 @@ Three things worth stating plainly, because the table is easy to over-read:
    no coverage threshold separates the remainder: driving it to zero means refusing 39% of
    answerable questions. The residue is questions whose topic terms are all present and only the
    asked-for value is absent. Citation verification at step 7 is what closes it.
+
+
+## Step 7: what was predicted, and what was measured
+
+When the harness landed I predicted citation verification would close the 0.300 made-up rate.
+That was **half right**, and the half that was wrong is worth recording.
+
+`made_up` did fall, 0.300 -> 0.200. But it fell because fixing the harness exposed a dead
+identifier rule (see below), **not** because of verification. The `+ verified` row scores
+identically to the row without it.
+
+The reason is structural. CI's generator is extractive: it quotes verbatim and cannot fabricate,
+so verification has nothing to catch. Its value is proven in
+`tests/unit/test_answer_path.py::test_pipeline_rejects_a_fabricated_value_and_abstains`, where a
+deliberately fabricating generator states a per-diem for a grade the table does not list and is
+caught with no model involved. Against a real LLM that matters; against the extractive floor it
+is a no-op.
+
+The two questions still answered are a **different failure**, and `citation_support` is 1.0 for
+both, correctly:
+
+- *"what is the per diem for a grade D destination"* -> quotes a real sentence about destination
+  grades that never states grade D's rate.
+- *"what is the retention period for board minutes"* -> quotes real sentences about retention
+  periods that never mention board minutes.
+
+The evidence is quoted faithfully and simply does not answer the question. That is an entailment
+judgement, not a citation check, and no deterministic rule sees it. The cross-encoder arriving
+with the models container at step 8 is the thing that can, which is why the `unsupported_answer_rate`
+floor stays at 0.25 until that is measured rather than being asserted now.

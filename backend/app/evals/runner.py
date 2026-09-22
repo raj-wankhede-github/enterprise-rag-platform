@@ -69,6 +69,11 @@ class AblationConfig:
     contextual: bool = True
     rerank: bool = False
     leg_weights: dict[str, float] | None = None
+    #: Run the full answer path (assemble, generate, verify) rather than stopping at the
+    #: evidence gate. The gate alone cannot catch a value absent from evidence that otherwise
+    #: looks sufficient; verification can, so the two produce different made_up rates and the
+    #: table should show both.
+    answer: bool = False
 
     @property
     def needs_own_index(self) -> bool:
@@ -80,6 +85,12 @@ DEFAULT_ABLATIONS: tuple[AblationConfig, ...] = (
     AblationConfig("dense_only", legs=frozenset({"dense"}), contextual=False),
     AblationConfig("hybrid_rrf", legs=frozenset({"bm25", "exact", "dense", "parent"}), contextual=False),
     AblationConfig("hybrid_rrf + contextual", legs=frozenset({"bm25", "exact", "dense", "parent"}), contextual=True),
+    AblationConfig(
+        "hybrid + contextual + verified",
+        legs=frozenset({"bm25", "exact", "dense", "parent"}),
+        contextual=True,
+        answer=True,
+    ),
 )
 
 
@@ -95,6 +106,8 @@ class QuestionResult:
     abstained: bool = False
     abstention_reason: str | None = None
     leaked_chunk_ids: list[str] = field(default_factory=list)
+    citation_support: float = 1.0
+    answered_text: str = ""
 
 
 @dataclass(slots=True)
@@ -114,6 +127,7 @@ class ConfigReport:
     abstention_recall: float
     unsupported_answer_rate: float
     permission_leak_rate: float
+    citation_support: float
     p50_ms: float
     p95_ms: float
     leg_contribution: dict[str, int] = field(default_factory=dict)
@@ -129,6 +143,7 @@ class ConfigReport:
             "mrr@10": round(self.mrr_at_10, 4),
             "abstention_recall": round(self.abstention_recall, 4),
             "unsupported_answer_rate": round(self.unsupported_answer_rate, 4),
+            "citation_support": round(self.citation_support, 4),
             "permission_leak_rate": round(self.permission_leak_rate, 4),
             "p95_ms": round(self.p95_ms, 1),
         }
@@ -273,22 +288,8 @@ class EvalRunner:
         for question in self.questions:
             resolved = resolve(question, index["chunks"])
             started = time.perf_counter()
-            outcome = await retriever.retrieve(
-                RetrievalRequest(
-                    query=question.question,
-                    scope=TenantScope(
-                        tenant_id=EVAL_TENANT,
-                        visibility_rank=question.rank,
-                        access_groups=(),
-                        generation_fingerprint=index["fingerprint"],
-                        include_superseded=question.include_superseded,
-                    ),
-                    profile=profile,
-                    exact_tokens=_identifiers(question.question),
-                    legs=config.legs,
-                    top_k=100,
-                )
-            )
+            request = _request_for(question, index, config, profile)
+            outcome = await retriever.retrieve(request)
             latency = (time.perf_counter() - started) * 1000.0
             assessment = assess(question.question, outcome.candidates, thresholds=self.thresholds)
 
@@ -314,6 +315,30 @@ class EvalRunner:
             )
 
         return _summarise(config.name, self.questions, results, len(index["chunks"]))
+
+
+def _request_for(
+    question: GoldenQuestion, index: dict[str, Any], config: AblationConfig, profile: RetrievalProfile
+) -> RetrievalRequest:
+    """One request shape for both the retrieval-only and the full answer arms.
+
+    Built once so the two arms cannot drift: a difference between their numbers must come from
+    the answer path, not from a subtly different query.
+    """
+    return RetrievalRequest(
+        query=question.question,
+        scope=TenantScope(
+            tenant_id=EVAL_TENANT,
+            visibility_rank=question.rank,
+            access_groups=(),
+            generation_fingerprint=index["fingerprint"],
+            include_superseded=question.include_superseded,
+        ),
+        profile=profile,
+        exact_tokens=_identifiers(question.question),
+        legs=config.legs,
+        top_k=100,
+    )
 
 
 class _NullContextualizer:
@@ -393,6 +418,7 @@ def _summarise(
             (len(unanswerable) - abstained_correctly) / len(unanswerable) if unanswerable else 0.0
         ),
         permission_leak_rate=(sum(1 for r in results if r.leaked_chunk_ids) / len(results) if results else 0.0),
+        citation_support=mean([r.citation_support for r in results if not r.abstained]),
         p50_ms=percentile([r.latency_ms for r in results], 0.50),
         p95_ms=percentile([r.latency_ms for r in results], 0.95),
         leg_contribution=contribution,

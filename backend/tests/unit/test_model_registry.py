@@ -88,3 +88,28 @@ def test_documents_are_identified_by_source_and_external_id_not_by_content() -> 
     ]
     assert {"tenant_id", "source_system", "external_id"} in uniques
     assert not any("blob_sha256" in u for u in uniques)
+
+
+def test_no_source_file_contains_a_stray_control_character() -> None:
+    """Guards a corruption that has already happened twice in this repo.
+
+    Writing source through a shell heredoc turns an intended ``\b`` inside a raw string into a
+    literal backspace (0x08). The file still parses, the regex still compiles, and it silently
+    matches nothing -- so an identifier rule and a number-normalisation rule both shipped dead
+    and were only found by a failing behaviour test much later.
+    """
+    import pathlib
+
+    forbidden = {0x07: "BELL", 0x08: "BACKSPACE", 0x0B: "VTAB", 0x0C: "FORMFEED", 0x1B: "ESC"}
+    offenders: list[str] = []
+    roots = [pathlib.Path("app"), pathlib.Path("tests"), pathlib.Path("bench")]
+    for root in roots:
+        for path in root.rglob("*.py"):
+            if "__pycache__" in path.parts:
+                continue
+            raw = path.read_bytes()
+            for code, name in forbidden.items():
+                if bytes([code]) in raw:
+                    line = raw[: raw.index(bytes([code]))].count(b"\n") + 1
+                    offenders.append(f"{path}:{line} contains {name} (0x{code:02X})")
+    assert not offenders, "stray control characters in source:\n  " + "\n  ".join(offenders)

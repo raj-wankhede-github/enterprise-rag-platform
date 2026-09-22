@@ -2,30 +2,28 @@
   "_comment": [
     "Absolute floors per ablation row, plus a relative gate.",
     "",
-    "Set from the first measured run with roughly five points of headroom, which is the honest",
-    "way to start: a floor invented before anything was measured either fails immediately or is",
-    "so loose it never fires. Raising a floor is a deliberate commit, so improvements ratchet",
-    "rather than drift.",
+    "Set from measured runs with roughly five points of headroom. Raising a floor is a",
+    "deliberate commit, so improvements ratchet rather than drift.",
     "",
-    "recall@10 is the gate, not recall@50. The evaluation corpus is 71 chunks, so recall@50 asks",
-    "whether the answer is somewhere in 70% of the index -- a semantically blind embedder scores",
-    "0.96 on it. The number is real and it is not evidence. recall@50 gets a floor only to catch",
-    "a collapse, and becomes the primary gate once the corpus is large enough for it to",
-    "discriminate. app/evals/report.py prints a warning while that is not the case.",
+    "recall@10 is the gate, not recall@50. The corpus is 71 chunks, so recall@50 asks whether",
+    "the answer is somewhere in 70% of the index -- a semantically blind embedder scores 0.96 on",
+    "it. report.py prints a warning until the corpus is large enough to discriminate.",
     "",
     "permission_leak_rate is zero-tolerance everywhere: a chunk above the asker's rank appearing",
     "in any candidate list is a breach, not a regression.",
     "",
-    "unsupported_answer_rate is 0.35 rather than 0, and that is a stated limitation rather than a",
-    "comfortable threshold. See bench/abstention_calibration.py: no coverage threshold separates",
-    "the remaining cases, because their topic terms are all present and only the asked-for value",
-    "is missing. Citation verification at build step 7 is what closes it, and this floor tightens",
-    "to 0 when it lands."
+    "unsupported_answer_rate is 0.25, measured, and the remaining cases are understood.",
+    "Citation verification closes the FABRICATED-value case -- proven by",
+    "tests/unit/test_answer_path.py with a generator that invents -- but the two that survive",
+    "here are a different failure: evidence quoted faithfully that does not answer the question.",
+    "citation_support is 1.0 for both, correctly, because the quote really is in the source.",
+    "Catching those needs an entailment judgement, which is the cross-encoder arriving with the",
+    "models container at build step 8. This floor tightens when that lands and is measured."
   ],
   "max_regression": 0.02,
   "absolute": {
     "bm25_only": {
-      "recall@10": 0.40,
+      "recall@10": 0.4,
       "permission_leak_rate": 0.0
     },
     "dense_only": {
@@ -34,8 +32,8 @@
     },
     "hybrid_rrf": {
       "recall@10": 0.85,
-      "recall@50": 0.90,
-      "ndcg@10": 0.70,
+      "recall@50": 0.9,
+      "ndcg@10": 0.7,
       "permission_leak_rate": 0.0
     },
     "hybrid_rrf + contextual": {
@@ -43,8 +41,18 @@
       "recall@50": 0.92,
       "ndcg@10": 0.75,
       "mrr@10": 0.75,
-      "abstention_recall": 0.60,
-      "unsupported_answer_rate": 0.35,
+      "abstention_recall": 0.7,
+      "unsupported_answer_rate": 0.25,
+      "permission_leak_rate": 0.0
+    },
+    "hybrid + contextual + verified": {
+      "recall@10": 0.88,
+      "recall@50": 0.92,
+      "ndcg@10": 0.75,
+      "mrr@10": 0.75,
+      "abstention_recall": 0.7,
+      "unsupported_answer_rate": 0.25,
+      "citation_support": 0.95,
       "permission_leak_rate": 0.0
     }
   }

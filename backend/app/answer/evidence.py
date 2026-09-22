@@ -127,7 +127,7 @@ _QUESTION_WORDS: frozenset[str] = frozenset(
 
 #: An identifier in the question is a request about that specific thing. Matching the pattern
 #: used by the retrieval planner so the two agree on what counts as one.
-_IDENTIFIER_RE: Final[re.Pattern[str]] = re.compile(r"[A-Z]{2,5}[-_]\d{2,}(?:[-_]\d+)*|\d+\.\d+(?:\.\d+)+")
+_IDENTIFIER_RE: Final[re.Pattern[str]] = re.compile(r"\b[A-Z]{2,5}[-_]\d{2,}(?:[-_]\d+)*\b|\b\d+\.\d+(?:\.\d+)+\b")
 
 
 @dataclass(frozen=True, slots=True)

@@ -98,6 +98,7 @@ def _metric_values(report: ConfigReport) -> dict[str, float]:
         "abstention_precision": report.abstention_precision,
         "abstention_recall": report.abstention_recall,
         "unsupported_answer_rate": report.unsupported_answer_rate,
+        "citation_support": report.citation_support,
         "permission_leak_rate": report.permission_leak_rate,
         "p50_ms": report.p50_ms,
         "p95_ms": report.p95_ms,
@@ -114,6 +115,7 @@ def render_table(reports: Sequence[ConfigReport]) -> str:
         "MRR@10",
         "abstain",
         "made_up",
+        "cite_ok",
         "leak",
         "p95ms",
     ]
@@ -126,6 +128,7 @@ def render_table(reports: Sequence[ConfigReport]) -> str:
             f"{report.mrr_at_10:.3f}",
             f"{report.abstention_recall:.3f}",
             f"{report.unsupported_answer_rate:.3f}",
+            f"{report.citation_support:.3f}",
             f"{report.permission_leak_rate:.3f}",
             f"{report.p95_ms:.0f}",
         ]

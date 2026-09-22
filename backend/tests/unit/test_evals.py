@@ -297,6 +297,7 @@ def report(name: str = "hybrid_rrf + contextual", **kwargs: float) -> ConfigRepo
         "abstention_recall": 0.8,
         "unsupported_answer_rate": 0.2,
         "permission_leak_rate": 0.0,
+        "citation_support": 1.0,
         "p50_ms": 20.0,
         "p95_ms": 40.0,
     }
@@ -391,6 +392,7 @@ def test_the_table_renders_every_config_and_the_headline_metrics() -> None:
     assert "bm25_only" in rendered
     assert "recall@10" in rendered
     assert "made_up" in rendered
+    assert "cite_ok" in rendered
     assert "leak" in rendered
 
 
@@ -400,3 +402,9 @@ def test_ablation_configs_differ_in_exactly_one_dimension_where_they_claim_to() 
     plain, contextual = by_name["hybrid_rrf"], by_name["hybrid_rrf + contextual"]
     assert plain.legs == contextual.legs
     assert plain.contextual is not contextual.contextual
+
+    # The verified arm differs from its neighbour in exactly one way: it runs the answer path.
+    verified = by_name["hybrid + contextual + verified"]
+    assert verified.legs == contextual.legs
+    assert verified.contextual is contextual.contextual
+    assert verified.answer is not contextual.answer
