@@ -171,6 +171,7 @@ class RetrievalDiagnostics:
     fast_path: bool = False
     fast_path_fellthrough: bool = False
     rerank_status: str = "skipped"
+    rerank_ms: float = 0.0
     indices: list[str] = field(default_factory=list)
     raw_dsl: list[dict[str, Any]] | None = None  # debug endpoint only
 

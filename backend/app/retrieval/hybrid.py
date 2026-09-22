@@ -24,6 +24,7 @@ from app.retrieval.legs.dense import DenseKnnLeg
 from app.retrieval.legs.lexical import Bm25Leg, ExactTokenLeg
 from app.retrieval.legs.parent import ParentBm25Leg, project_to_children
 from app.retrieval.priors import apply_priors
+from app.retrieval.rerank.base import Reranker
 from app.retrieval.types import (
     Candidate,
     LegDiagnostics,
@@ -51,6 +52,9 @@ class OpenSearchHybridRetriever:
         parent_index: str,
         embedder: Embedder | None = None,
         legs: Sequence[RetrievalLeg] | None = None,
+        reranker: Reranker | None = None,
+        rerank_top_n: int = 24,
+        rerank_timeout_s: float = 0.4,
         apply_priors_after_fusion: bool = True,
         debug: bool = False,
     ) -> None:
@@ -59,6 +63,9 @@ class OpenSearchHybridRetriever:
         self.parent_index = parent_index
         self.embedder = embedder
         self.legs = list(legs) if legs is not None else default_legs()
+        self.reranker = reranker
+        self.rerank_top_n = rerank_top_n
+        self.rerank_timeout_s = rerank_timeout_s
         self.apply_priors_after_fusion = apply_priors_after_fusion
         self.debug = debug
 
@@ -118,8 +125,35 @@ class OpenSearchHybridRetriever:
         if self.apply_priors_after_fusion:
             fused = apply_priors(fused)
 
+        fused = await self._rerank(request, fused, diagnostics)
+
         diagnostics.total_ms = (time.perf_counter() - started) * 1000.0
         return RetrievalOutcome(candidates=fused[: request.top_k], diagnostics=diagnostics)
+
+    async def _rerank(
+        self, request: RetrievalRequest, fused: list[Candidate], diagnostics: RetrievalDiagnostics
+    ) -> list[Candidate]:
+        """Reorder the fused head, keeping the tail intact.
+
+        Only the top ``rerank_top_n`` are scored -- that cap is the main reason the latency
+        budget is achievable at all. The unscored tail is appended unchanged rather than
+        discarded, so recall@50 is unaffected by a reranker that only ever sees 24 candidates.
+        """
+        if self.reranker is None or not request.profile.rerank_enabled or not fused:
+            diagnostics.rerank_status = "skipped"
+            return fused
+
+        top_n = min(request.profile.rerank_top_n or self.rerank_top_n, len(fused))
+        head, tail = fused[:top_n], fused[top_n:]
+        started = time.perf_counter()
+        try:
+            reordered = await self.reranker.rerank(request.query, head, top_n=top_n, timeout_s=self.rerank_timeout_s)
+            diagnostics.rerank_status = "ok"
+        except Exception as exc:  # degrade to fusion order, never fail the search
+            diagnostics.rerank_status = f"failed: {type(exc).__name__}"
+            return fused
+        diagnostics.rerank_ms = (time.perf_counter() - started) * 1000.0
+        return reordered + tail
 
     # -- internals -----------------------------------------------------------------------
 

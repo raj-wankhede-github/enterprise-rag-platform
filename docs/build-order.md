@@ -13,8 +13,8 @@ after step 6 ships without the ablation table showing it earned its latency.
 | 5 | Retrieval: four legs and one `_msearch` | candidates carry per-leg ranks | **done** |
 | 6 | **Eval harness, golden set, ablation runner, CI gate** | the table prints in under four minutes | **done** -- 20s, gating CI |
 | 7 | Answer path: assembly, extractive generator, deterministic verification | citation-support and abstention metrics appear in the table | **done** -- made_up 0.300 -> 0.200, `cite_ok` in the table |
-| 8 | `models` container, cross-encoder reranker, `rerank_bench.py` | a real nDCG delta, p95 within budget | **next** -- the cross-encoder also becomes the entailment scorer that should close the last 0.200 |
-| 9 | Query understanding: rules, fast path, then one LLM call | fast path p95 under 60 ms | pending |
+| 8 | `models` container, cross-encoder reranker, `rerank_bench.py` | a real nDCG delta, p95 within budget | **done** -- nDCG@10 0.832 -> 0.895 for +12 ms |
+| 9 | Query understanding: rules, fast path, then one LLM call | fast path p95 under 60 ms | **next** |
 | 10 | Contextual retrieval: template, then LLM with prompt caching | `+contextual` row, measured cost per 1k chunks | pending |
 | 11 | `parser` container (Docling), OCR, tables | scanned-PDF and table strata pass | pending |
 | 12 | Generation rebuild and atomic alias swap, shadow-evaluated | zero errors and zero empty results under continuous traffic | pending |
@@ -91,3 +91,35 @@ The evidence is quoted faithfully and simply does not answer the question. That 
 judgement, not a citation check, and no deterministic rule sees it. The cross-encoder arriving
 with the models container at step 8 is the thing that can, which is why the `unsupported_answer_rate`
 floor stays at 0.25 until that is measured rather than being asserted now.
+
+
+## Step 8: reranking earns its latency; entailment does not close the gap
+
+Measured with the lexical reranker, which is what CI can run offline:
+
+```
+config                               recall@10  nDCG@10  MRR@10  made_up  cite_ok  p95ms
+hybrid_rrf + contextual              0.941      0.832    0.818   0.200    1.000    26
+hybrid + contextual + rerank         0.980      0.895    0.889   0.200    1.000    37
+hybrid + contextual + verified       0.941      0.832    0.818   0.200    1.000    154
+hybrid + rerank + verified + entail  0.980      0.895    0.889   0.200    1.000    137
+```
+
+**Reranking earns its place.** +6.3 points of nDCG@10 and +7.1 of MRR@10 for about 12 ms, from a
+reranker with no idea what a sentence means. That is the floor; the cross-encoder should beat it,
+and `bench/rerank_bench.py` is what will say whether it does so inside the latency budget.
+
+**Entailment did not move the made-up rate**, and the reason is now measured rather than
+suspected. CI's generator is extractive, so a claim *is* a quote from its own evidence: lexical
+entailment scores it 1.0 by construction, and `citation_support` is legitimately 1.0. There is a
+test asserting exactly this limitation so the proxy is never mistaken for a model.
+
+A correction to the step 7 write-up, which was right by accident: the `verified` row scored
+identically to the plain row because **the answer path was never wired into the eval runner** --
+a patch was silently lost. It is wired now (p95 26 -> 154 ms proves it), the numbers are
+unchanged, and the conclusion stands for the right reason.
+
+The two surviving cases need a judgement of *"does this evidence answer the question"*, not
+*"does this evidence support the claim"*. Those are different questions and only the second was
+being asked. A real cross-encoder scoring the question against the cited evidence is the thing
+that can answer the first.

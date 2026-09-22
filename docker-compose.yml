@@ -148,13 +148,30 @@ services:
 
   # --- optional services ---------------------------------------------------------------------
 
+  # Cross-encoder reranking and entailment. Its own container so torch/ONNX never enter the API
+  # image, and so it can pin Python 3.12 while the API runs 3.14. The model is baked in at build
+  # time, not fetched on boot -- a service that downloads weights to start cannot start in an
+  # air-gapped deployment.
   models:
     profiles: [models]
-    build: ./deploy/models
+    build:
+      context: ./deploy/models
+      args:
+        RERANKER_MODEL: ${RERANKER_MODEL:-BAAI/bge-reranker-base}
     environment:
       RERANKER_MODEL: ${RERANKER_MODEL:-BAAI/bge-reranker-base}
+      MAX_LENGTH: ${RERANK_MAX_TOKENS:-288}
+      # Passive spin-wait: an idle OpenMP pool busy-waiting competes with every other container
+      # on the host for no benefit at this batch size.
       OMP_WAIT_POLICY: PASSIVE
+      OMP_NUM_THREADS: ${MODELS_THREADS:-4}
     ports: ["${MODELS_PORT:-8002}:8000"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
     restart: unless-stopped
 
   parser:

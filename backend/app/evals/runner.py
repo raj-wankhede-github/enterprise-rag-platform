@@ -22,7 +22,10 @@ from typing import Any
 
 from opensearchpy import AsyncOpenSearch
 
+from app.answer.assemble import AssemblyConfig
 from app.answer.evidence import EvidenceThresholds, assess
+from app.answer.generator import ExtractiveAnswerGenerator
+from app.answer.pipeline import AnswerPipeline, OpenSearchParentFetcher
 from app.embeddings.hashing import HashingEmbedder
 from app.evals.dataset import (
     CorpusDocument,
@@ -46,6 +49,8 @@ from app.ingestion.contextualize import DocumentContext, TemplateContextualizer
 from app.ingestion.loaders import default_registry
 from app.ingestion.pipeline import IngestionPipeline, index_action
 from app.retrieval.hybrid import OpenSearchHybridRetriever
+from app.retrieval.rerank.base import IdentityReranker, Reranker
+from app.retrieval.rerank.lexical import LexicalEntailmentScorer, LexicalReranker
 from app.retrieval.types import RetrievalProfile, RetrievalRequest, TenantScope
 from app.search.client import SearchClient
 from app.search.generations import chunk_document_id
@@ -69,11 +74,18 @@ class AblationConfig:
     contextual: bool = True
     rerank: bool = False
     leg_weights: dict[str, float] | None = None
+    #: Which reranker to apply after fusion. "identity" is the control arm: any nDCG movement
+    #: against it is attributable to reranking, because nothing else differs between the rows.
+    reranker: str = "identity"
     #: Run the full answer path (assemble, generate, verify) rather than stopping at the
     #: evidence gate. The gate alone cannot catch a value absent from evidence that otherwise
     #: looks sufficient; verification can, so the two produce different made_up rates and the
     #: table should show both.
     answer: bool = False
+    #: Enable the entailment layer of citation verification. Its own row because it is the
+    #: stage predicted to catch "evidence quoted faithfully that does not answer the question",
+    #: and a prediction deserves its own measurement rather than being folded into another.
+    entailment: bool = False
 
     @property
     def needs_own_index(self) -> bool:
@@ -86,10 +98,24 @@ DEFAULT_ABLATIONS: tuple[AblationConfig, ...] = (
     AblationConfig("hybrid_rrf", legs=frozenset({"bm25", "exact", "dense", "parent"}), contextual=False),
     AblationConfig("hybrid_rrf + contextual", legs=frozenset({"bm25", "exact", "dense", "parent"}), contextual=True),
     AblationConfig(
+        "hybrid + contextual + rerank",
+        legs=frozenset({"bm25", "exact", "dense", "parent"}),
+        contextual=True,
+        reranker="lexical",
+    ),
+    AblationConfig(
         "hybrid + contextual + verified",
         legs=frozenset({"bm25", "exact", "dense", "parent"}),
         contextual=True,
         answer=True,
+    ),
+    AblationConfig(
+        "hybrid + rerank + verified + entail",
+        legs=frozenset({"bm25", "exact", "dense", "parent"}),
+        contextual=True,
+        reranker="lexical",
+        answer=True,
+        entailment=True,
     ),
 )
 
@@ -281,17 +307,47 @@ class EvalRunner:
             chunk_index=index["chunk_index"],
             parent_index=index["parent_index"],
             embedder=self.embedder,
+            reranker=_reranker_for(config),
         )
         profile = RetrievalProfile(leg_weights=config.leg_weights or RetrievalProfile().leg_weights)
+
+        # Built for every config, used only when the row asks for the answer path. Sharing the
+        # retriever instance matters: the answer arm must see exactly the candidates the
+        # retrieval arm measured, or the two rows are not comparable.
+        pipeline = AnswerPipeline(
+            retriever=retriever,
+            generator=ExtractiveAnswerGenerator(),
+            parent_fetcher=OpenSearchParentFetcher(self.search, index=index["parent_index"], routing=str(EVAL_TENANT)),
+            assembly=AssemblyConfig(token_budget=3000, max_blocks=6),
+            thresholds=self.thresholds,
+            scorer=LexicalEntailmentScorer() if config.entailment else None,
+        )
         results: list[QuestionResult] = []
 
         for question in self.questions:
             resolved = resolve(question, index["chunks"])
-            started = time.perf_counter()
             request = _request_for(question, index, config, profile)
+
+            started = time.perf_counter()
             outcome = await retriever.retrieve(request)
             latency = (time.perf_counter() - started) * 1000.0
+
             assessment = assess(question.question, outcome.candidates, thresholds=self.thresholds)
+            abstained = not assessment.sufficient
+            reason = assessment.reason.value if assessment.reason else None
+            citation_support = 1.0
+            answered_text = ""
+
+            if config.answer:
+                # The full path: assemble, generate, verify. An answer that fails verification
+                # becomes an abstention, which is what should move the made-up rate.
+                started = time.perf_counter()
+                produced = await pipeline.answer(request)
+                latency = (time.perf_counter() - started) * 1000.0
+                abstained = not produced.answer.answerable
+                reason = produced.answer.reason.value if produced.answer.reason else None
+                citation_support = produced.trace.citation_support
+                answered_text = produced.answer.text if produced.answer.answerable else ""
 
             # Anything above the asker's rank must never appear. This is a build-breaking metric,
             # so it is measured on the raw candidate list rather than on what survives assembly.
@@ -308,13 +364,19 @@ class EvalRunner:
                     per_leg=_per_leg(outcome.candidates),
                     unresolved_labels=len(resolved.unresolved),
                     latency_ms=latency,
-                    abstained=not assessment.sufficient,
-                    abstention_reason=assessment.reason.value if assessment.reason else None,
+                    abstained=abstained,
+                    abstention_reason=reason,
                     leaked_chunk_ids=leaked,
+                    citation_support=citation_support,
+                    answered_text=answered_text,
                 )
             )
 
         return _summarise(config.name, self.questions, results, len(index["chunks"]))
+
+
+def _reranker_for(config: AblationConfig) -> Reranker:
+    return LexicalReranker() if config.reranker == "lexical" else IdentityReranker()
 
 
 def _request_for(

@@ -18,7 +18,12 @@
     "here are a different failure: evidence quoted faithfully that does not answer the question.",
     "citation_support is 1.0 for both, correctly, because the quote really is in the source.",
     "Catching those needs an entailment judgement, which is the cross-encoder arriving with the",
-    "models container at build step 8. This floor tightens when that lands and is measured."
+    "models container at build step 8. This floor tightens when that lands and is measured.",
+    "",
+    "The rerank rows are measured with the LEXICAL reranker, which is what CI can run offline.",
+    "It is a deliberate floor, not the shipping model: whatever the cross-encoder achieves above",
+    "these numbers is the model's genuine contribution rather than the effect of reordering by",
+    "term overlap. Run bench/rerank_bench.py against the models container for the real numbers."
   ],
   "max_regression": 0.02,
   "absolute": {
@@ -54,6 +59,25 @@
       "unsupported_answer_rate": 0.25,
       "citation_support": 0.95,
       "permission_leak_rate": 0.0
+    },
+    "hybrid + contextual + rerank": {
+      "recall@10": 0.93,
+      "recall@50": 0.92,
+      "ndcg@10": 0.84,
+      "mrr@10": 0.83,
+      "abstention_recall": 0.7,
+      "unsupported_answer_rate": 0.25,
+      "permission_leak_rate": 0.0
+    },
+    "hybrid + rerank + verified + entail": {
+      "recall@10": 0.93,
+      "recall@50": 0.92,
+      "ndcg@10": 0.84,
+      "mrr@10": 0.83,
+      "abstention_recall": 0.7,
+      "unsupported_answer_rate": 0.25,
+      "permission_leak_rate": 0.0,
+      "citation_support": 0.95
     }
   }
 }
