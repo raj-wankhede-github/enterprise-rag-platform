@@ -83,6 +83,18 @@ GLOBAL_TABLES: frozenset[str] = frozenset(
         "tenant_index_bindings",
         # Cluster-wide index state. Generations span every tenant in a pool.
         "index_generations",
+        # --- read before a principal exists, which is the whole point of them ---
+        # Email-first discovery resolves the tenant FROM these, so they cannot be filtered by a
+        # tenant that has not been established yet. Both carry tenant_id and every read asserts
+        # it explicitly; neither is reachable from a tenant-facing query path.
+        "idp_configs",
+        "user_identities",
+        # Keyed on the submitted email rather than on a user, because the attempts worth
+        # detecting are those against accounts that do not exist -- and therefore against no
+        # tenant. Contains no password, token or hash of either.
+        "login_attempts",
+        # Resolved from a cookie before the principal it identifies has been loaded.
+        "sessions",
         # --- deliberately shared caches ---
         # Content-addressed: one row per distinct byte sequence, refcounted across tenants. A
         # blob row reveals nothing about who references it.

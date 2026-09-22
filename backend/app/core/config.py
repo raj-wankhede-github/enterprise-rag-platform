@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     cors_origins: list[str] = Field(default_factory=list)
     allowed_origins_strict: bool = True
 
+    #: The externally visible origin, used to build the OIDC redirect URI.
+    #:
+    #: Configured rather than derived from the request, because the provider compares the
+    #: redirect URI byte for byte against its registration -- and behind a proxy the request's
+    #: own scheme and host are whatever the proxy chose to forward. Deriving it is how a working
+    #: development setup becomes a "redirect_uri_mismatch" the first time it is deployed.
+    public_base_url: str = "http://localhost:8001"
+
     # --- providers --------------------------------------------------------------------
     # The offline triple. CI runs on these: no paid API, no model download, deterministic output,
     # which is what makes the ablation table runnable on every pull request.

@@ -18,7 +18,7 @@ after step 6 ships without the ablation table showing it earned its latency.
 | 10 | Contextual retrieval: template, then LLM with prompt caching | `+contextual` row, measured cost per 1k chunks | **done** |
 | 11 | `parser` container (Docling), OCR, tables | scanned-PDF and table strata pass | **done** (container not built locally -- see note) |
 | 12 | Generation rebuild and atomic alias swap, shadow-evaluated | zero errors and zero empty results under continuous traffic | **done** (integration suite written, not yet run -- see note) |
-| 13 | SSO: discovery, OIDC, JIT provisioning, admin wizard | round trip against Keycloak and a real Entra tenant | pending |
+| 13 | SSO: discovery, OIDC, JIT provisioning, admin wizard | round trip against Keycloak and a real Entra tenant | **done** (no live IdP round trip yet) |
 | 14 | Frontend: routes, AuthContext, login, search and ask, admin | capability-gated nav, every error state demoed | pending |
 | 15 | API keys, Redis rate limiting, concurrency caps | limits hold across two replicas | pending |
 | 16 | Platform operator plane: separate app, host and audience; support grants | an operator cannot read tenant content without a grant | pending |
@@ -208,3 +208,42 @@ paged on the OpenSearch `_id`, which is a SHA-256 -- meaning every page would ha
 hash per candidate row and ordered randomly against every index the table has. Paging is now
 keyset on `(tenant_id, document_version_id, ordinal)`, and the cursor is opaque to the
 orchestrator so a source owns its own key space.
+
+
+## Step 13: SSO
+
+Discovery, the OIDC code flow with PKCE, JIT provisioning with role mapping, session and refresh
+handling, CSRF, and the admin wizard's claim preview. 159 new tests.
+
+What is **not** done: the live round trip against Keycloak and a real Entra tenant. That needs
+containers this machine has no disk for. Everything either side of the network call is tested --
+the authorization request, state signing, the token exchange against a mock transport, claim
+extraction, role resolution and the provisioning decision -- so what remains untested is
+specifically the provider's own behaviour.
+
+Decisions worth not rediscovering:
+
+* **Identity is matched on the IdP's immutable subject, never on email.** Entra's `oid` before
+  `sub`, because `sub` is pairwise per application and changes if the app registration is
+  recreated. Email is consulted in exactly one place: linking an administrator-created account on
+  its *first* SSO login, and only when the provider marks the address verified.
+* **JIT can never create an ADMIN.** A new user gets the config's `default_role`, which a
+  database CHECK forbids from being ADMIN. Group mappings apply to existing users only. The first
+  ADMIN of a tenant is created by a human.
+* **Highest matching role wins**, not first match — otherwise the outcome depends on dictionary
+  ordering. An existing user whose groups stop matching keeps their role rather than falling back
+  to the default, which would silently demote every administrator the day a claim name changes.
+* **Every password-login failure is identical** in message, status and response time. The real
+  reason goes to `login_attempts`, where an administrator can see it and an attacker cannot.
+* **State is signed and self-contained, not a cookie.** A cookie-dependent callback fails
+  intermittently in Safari, in in-app webviews, and anywhere a SameSite rule drops it on the way
+  back from the provider — failures that are close to unreproducible.
+* **Google Workspace groups are not in the ID token.** They need a Directory API call with
+  domain-wide delegation, and the wizard's preview says so explicitly rather than leaving an
+  administrator to discover it after activation.
+
+One bug found by a route test rather than by review: raising an `AuthenticationError` after
+clearing cookies discarded the `Set-Cookie` headers, because the exception handler builds its own
+response. A failed refresh therefore left the dead token in the browser and every subsequent
+request retried with it — a loop the user could not escape without clearing site data. `AppError`
+now carries `clear_cookies` and the handler applies it.

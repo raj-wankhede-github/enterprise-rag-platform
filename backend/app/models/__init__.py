@@ -16,6 +16,16 @@ from app.models.document import (
     DocumentUploadEvent,
     DocumentVersion,
 )
+from app.models.identity import (
+    IdpConfig,
+    IdpKind,
+    IdpProtocol,
+    IdpState,
+    LoginAttempt,
+    Session,
+    TenantDomain,
+    UserIdentity,
+)
 from app.models.job import IndexGeneration, IngestJob, JobEvent
 from app.models.tenant import Tenant, TenantIndexBinding
 from app.models.user import Collection, RoleElevationGrant, User, UserCollectionScope
@@ -31,13 +41,21 @@ __all__ = [
     "DocumentUploadEvent",
     "DocumentVersion",
     "EmbeddingCache",
+    "IdpConfig",
+    "IdpKind",
+    "IdpProtocol",
+    "IdpState",
     "IndexGeneration",
     "IngestJob",
     "JobEvent",
+    "LoginAttempt",
     "Parent",
     "RoleElevationGrant",
+    "Session",
     "Tenant",
+    "TenantDomain",
     "TenantIndexBinding",
     "User",
     "UserCollectionScope",
+    "UserIdentity",
 ]

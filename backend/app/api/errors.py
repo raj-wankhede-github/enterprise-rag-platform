@@ -35,7 +35,10 @@ async def _app_error_handler(request: Request, exc: Exception) -> JSONResponse:
     if isinstance(exc, RateLimitedError):
         headers["Retry-After"] = str(exc.retry_after_seconds)
 
-    return JSONResponse(status_code=exc.status_code, content=body, headers=headers)
+    response = JSONResponse(status_code=exc.status_code, content=body, headers=headers)
+    for name in exc.clear_cookies:
+        response.delete_cookie(name, path="/")
+    return response
 
 
 async def _unhandled_handler(request: Request, exc: Exception) -> JSONResponse:

@@ -23,10 +23,18 @@ class AppError(Exception):
         *,
         detail: str | None = None,
         extra: dict[str, Any] | None = None,
+        clear_cookies: tuple[str, ...] = (),
     ) -> None:
         self.message = message or type(self).message
         self.detail = detail
         self.extra = extra or {}
+        #: Cookies the error response must delete.
+        #:
+        #: Needed because an exception handler builds its *own* response, so anything a route
+        #: set on the injected ``Response`` before raising is discarded. Without this, a refresh
+        #: that fails on a dead token leaves that token in the browser and every subsequent
+        #: request retries with it -- a loop the user cannot escape without clearing site data.
+        self.clear_cookies = clear_cookies
         super().__init__(self.message)
 
 
