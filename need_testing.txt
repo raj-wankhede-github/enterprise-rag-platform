@@ -1,0 +1,19 @@
+Final state:
+┌────────────────┬────────+───────────────────────────────────┐
+│                │                  Result                   │
+├────────────────┼───────────────────────────────────────────┤
+│ Unit           │ 1041 passed, 1 skipped                    │
+├────────────────┼───────────────────────────────────────────┤
+│ Integration    │ 76 passed — four consecutive clean runs   │
+├────────────────┼───────────────────────────────────────────┤
+│ Frontend       │ 56 passed                                 │
+├────────────────┼───────────────────────────────────────────┤
+│ Ablation table │ reproduces exactly against a real cluster │
+└────────────────┴───────────────────────────────────────────┘
+
+config                               recall@10  recall@50  nDCG@10  MRR@10  cite_ok  leak   p95ms
+hybrid + contextual + rerank         0.980      0.990      0.895    0.889   1.000    0.000  21
+hybrid + rerank + verified + entail  0.980      0.990      0.895    0.889   1.000    0.000  92
+
+
+Five things remain unverified, all needing infrastructure this machine doesn't have: the SSO round trip (Keycloak, a real Entra tenant), SharePoint sync (a real Graph tenant), limits across two replicas, the parser container, and the BYOC CI job.

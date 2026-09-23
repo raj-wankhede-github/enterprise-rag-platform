@@ -71,7 +71,7 @@ exclude = ["alembic/versions"]
 [[tool.mypy.overrides]]
 # opentelemetry is optional at runtime and imported inside a try/except: a deployment that does
 # not want the SDK is a supported configuration, so its absence must not fail a type check.
-module = ["opensearchpy.*", "authlib.*", "opentelemetry.*"]
+module = ["opensearchpy.*", "authlib.*", "opentelemetry.*", "aioboto3.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
