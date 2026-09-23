@@ -272,19 +272,44 @@ async def test_a_rebuild_and_swap_under_continuous_traffic_loses_nothing(
     assert runner.state is GenerationState.LIVE
 
 
-async def test_the_read_alias_resolves_to_exactly_one_index_per_pool_after_the_swap(
+async def test_the_read_alias_spans_both_generations_during_the_drain(
     client: AsyncOpenSearch,
 ) -> None:
-    """A swap that adds without removing leaves the alias spanning both generations.
+    """The fix for the bug the continuous-traffic test caught.
 
-    Queries then match across two fingerprints, and because every query filters on one, half the
-    shards are searched for nothing -- slower, and silently so.
+    An earlier version moved the read alias wholesale, on the reasoning that an alias spanning
+    two generations searches shards that can never match. That is true and it is the cheaper
+    problem: every query asserts a ``generation_fingerprint`` term filter, and a reader learns
+    the new fingerprint from its own next refresh rather than at the instant the alias moves. A
+    single-phase move therefore leaves a window in which a reader holding the old fingerprint
+    queries an alias resolving only to the new index -- valid, HTTP 200, zero hits, nothing
+    logged, and the user sees "no results" for their own documents.
     """
     await seed_generation_one(client)
     admin = IndexAdmin(client, shards=1, replicas=0)
     for pool in POOLS:
         await admin.create_generation(generation=2, pool=pool, dimension=NEW_DIM, for_backfill=False)
-    await admin.swap(from_generation=1, to_generation=2, pools=POOLS)
+    await admin.promote(from_generation=1, to_generation=2, pools=POOLS)
+
+    for pool in POOLS:
+        resolved = await client.indices.get_alias(name=chunk_read_alias(pool))
+        assert set(resolved) == {
+            chunk_index_name(generation=1, pool=pool),
+            chunk_index_name(generation=2, pool=pool),
+        }
+
+
+async def test_the_read_alias_narrows_to_one_index_once_the_drain_closes(
+    client: AsyncOpenSearch,
+) -> None:
+    """The window is temporary. Left open, every query searches shards that cannot match --
+    slower, and silently so."""
+    await seed_generation_one(client)
+    admin = IndexAdmin(client, shards=1, replicas=0)
+    for pool in POOLS:
+        await admin.create_generation(generation=2, pool=pool, dimension=NEW_DIM, for_backfill=False)
+    await admin.promote(from_generation=1, to_generation=2, pools=POOLS)
+    await admin.finish_drain(generation=1, pools=POOLS)
 
     for pool in POOLS:
         resolved = await client.indices.get_alias(name=chunk_read_alias(pool))
@@ -298,7 +323,7 @@ async def test_exactly_one_index_holds_the_write_alias_after_the_swap(client: As
     admin = IndexAdmin(client, shards=1, replicas=0)
     for pool in POOLS:
         await admin.create_generation(generation=2, pool=pool, dimension=NEW_DIM, for_backfill=False)
-    await admin.swap(from_generation=1, to_generation=2, pools=POOLS)
+    await admin.promote(from_generation=1, to_generation=2, pools=POOLS)
 
     for pool in POOLS:
         resolved = await client.indices.get_alias(name=chunk_write_alias(pool))
@@ -335,6 +360,8 @@ async def test_a_rollback_restores_the_previous_generation_in_one_call(client: A
     for pool in POOLS:
         resolved = await client.indices.get_alias(name=chunk_read_alias(pool))
         assert list(resolved) == [chunk_index_name(generation=1, pool=pool)]
+        writers = await client.indices.get_alias(name=chunk_write_alias(pool))
+        assert list(writers) == [chunk_index_name(generation=1, pool=pool)]
     # And the old generation still answers, which is the entire point of not deleting it.
     assert await search_once(client, pool=0, fingerprint=OLD_SPEC.fingerprint) > 0
 

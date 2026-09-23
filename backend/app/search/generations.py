@@ -197,20 +197,75 @@ def alias_remove_actions(*, generation: int, pool: int) -> list[AliasAction]:
     ]
 
 
-def swap_actions(*, from_generation: int, to_generation: int, pool: int) -> list[AliasAction]:
-    """The alias actions for promoting a generation.
+def promote_actions(*, from_generation: int, to_generation: int, pool: int) -> list[AliasAction]:
+    """Phase one of a swap: the new generation starts serving, the old one keeps serving.
 
-    Returned as a list so every pool's actions can be sent in ONE ``_aliases`` request. That
-    atomicity is the point: a per-pool loop leaves the cluster serving a mixture of generations
-    for however long the loop takes, and a failure halfway through leaves it that way for good.
+    The read alias is **added** to, not moved. For the length of the drain window it spans both
+    generations, and that is the whole point rather than an oversight.
 
-    Removes precede adds, which matters for the write aliases: OpenSearch rejects a request that
-    would leave two indices claiming ``is_write_index`` on the same alias, and actions apply in
-    order within the single atomic request.
+    Every query carries a ``generation_fingerprint`` term filter, and a reader learns the new
+    fingerprint from its own next refresh -- not at the instant the alias moves. A single-phase
+    swap therefore leaves a window in which a reader still holding the old fingerprint queries
+    an alias that now resolves only to the new index: the query is valid, returns HTTP 200, and
+    matches nothing. No error is logged anywhere and the user sees "no results" for their own
+    documents. Reversing the order just moves the window to the other side.
+
+    With both generations readable, a reader holding either fingerprint finds its own documents
+    and the window closes on its own. The integration test drives continuous traffic through a
+    swap to hold this property; it is the reason that test exists.
+
+    The *write* alias still moves atomically and exactly once -- OpenSearch permits only one
+    ``is_write_index`` per alias, and two generations accepting writes is a different and worse
+    problem. Removes precede adds because actions apply in order within the one request.
+    """
+    chunks_from = chunk_index_name(generation=from_generation, pool=pool)
+    parents_from = parent_index_name(generation=from_generation, pool=pool)
+    chunks_to = chunk_index_name(generation=to_generation, pool=pool)
+    parents_to = parent_index_name(generation=to_generation, pool=pool)
+
+    return [
+        # Writes move wholesale.
+        {"remove": {"index": chunks_from, "alias": chunk_write_alias(pool)}},
+        {"remove": {"index": parents_from, "alias": parent_write_alias(pool)}},
+        {"add": {"index": chunks_to, "alias": chunk_write_alias(pool), "is_write_index": True}},
+        {"add": {"index": parents_to, "alias": parent_write_alias(pool), "is_write_index": True}},
+        # Reads widen. The old generation is removed later, by retire_read_actions.
+        {"add": {"index": chunks_to, "alias": chunk_read_alias(pool)}},
+        {"add": {"index": parents_to, "alias": parent_read_alias(pool)}},
+    ]
+
+
+def retire_read_actions(*, generation: int, pool: int) -> list[AliasAction]:
+    """Phase two: stop reading the old generation, once every reader has moved on.
+
+    Separated from promotion by the drain window. Doing both at once is the bug described in
+    ``promote_actions``; doing this too early reintroduces it.
     """
     return [
-        *alias_remove_actions(generation=from_generation, pool=pool),
-        *alias_add_actions(generation=to_generation, pool=pool),
+        {"remove": {"index": chunk_index_name(generation=generation, pool=pool), "alias": chunk_read_alias(pool)}},
+        {"remove": {"index": parent_index_name(generation=generation, pool=pool), "alias": parent_read_alias(pool)}},
+    ]
+
+
+def rollback_actions(*, live_generation: int, back_to: int, pool: int) -> list[AliasAction]:
+    """Undo a promotion during the drain window.
+
+    Cheap precisely because the old generation never stopped being readable: only the write
+    alias has to move back, and the new generation leaves the read alias. One call, no rebuild --
+    which is what makes rolling back something a team will actually do under pressure.
+    """
+    chunks_live = chunk_index_name(generation=live_generation, pool=pool)
+    parents_live = parent_index_name(generation=live_generation, pool=pool)
+    chunks_back = chunk_index_name(generation=back_to, pool=pool)
+    parents_back = parent_index_name(generation=back_to, pool=pool)
+
+    return [
+        {"remove": {"index": chunks_live, "alias": chunk_write_alias(pool)}},
+        {"remove": {"index": parents_live, "alias": parent_write_alias(pool)}},
+        {"add": {"index": chunks_back, "alias": chunk_write_alias(pool), "is_write_index": True}},
+        {"add": {"index": parents_back, "alias": parent_write_alias(pool), "is_write_index": True}},
+        {"remove": {"index": chunks_live, "alias": chunk_read_alias(pool)}},
+        {"remove": {"index": parents_live, "alias": parent_read_alias(pool)}},
     ]
 
 

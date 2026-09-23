@@ -453,3 +453,59 @@ What has **not** been run, and needs infrastructure rather than code:
 
 Every one of these is a claim currently resting on a mock. The code either side of each network
 boundary is tested; what is untested is the other side's behaviour.
+
+
+## The integration suite, run at last — and what it caught
+
+With disk freed, all 76 integration tests ran against a real OpenSearch cluster. **75 passed
+immediately. One failed, and it was a real design bug in the alias swap** — the exact bug the
+test was written to catch.
+
+`test_a_rebuild_and_swap_under_continuous_traffic_loses_nothing` passed in isolation and failed
+in the full suite: *1 of 104 queries returned nothing*. Not an error, not a timeout — a valid
+HTTP 200 with zero hits, which is the failure mode the "zero empty results" half of that
+assertion exists for.
+
+### The bug
+
+Every query asserts a `generation_fingerprint` term filter. A reader learns the new fingerprint
+from its own next refresh, **not** at the instant the alias moves. The single-phase swap removed
+the old generation from the read alias at the same moment it added the new one, leaving a window
+where a reader still holding the old fingerprint queried an alias that now resolved only to the
+new index. Valid query, 200 OK, no match, nothing logged — and the user sees "no results" for
+their own documents.
+
+Reversing the two operations does not help; it just moves the window to the other side (new
+fingerprint, old index). Any single-phase ordering has a gap.
+
+### The fix
+
+Two-phase promotion, which is what the `DRAINING` state was always for and which the old
+`swap()` defeated:
+
+1. **`promote`** — writes move wholesale to the new generation; reads **widen** to span both.
+2. **drain** — readers pick up the new fingerprint at their own pace. Either fingerprint finds
+   its own documents, so the window closes on its own.
+3. **`finish_drain`** — the old generation leaves the read alias, then can be deleted.
+
+`rollback` becomes cheaper too, and that is the point: the old generation never stopped being
+readable, so only the write alias moves back.
+
+One existing test had to change because it encoded the wrong invariant — it asserted the read
+alias resolved to exactly one index immediately after the swap, which *was* the bug. It now
+asserts the alias spans both during the drain and narrows afterwards.
+
+Verified across four consecutive full runs of the suite.
+
+### Status
+
+| | Result |
+|---|---|
+| Unit | **1041 passed**, 1 skipped |
+| Integration | **76 passed** (4 consecutive clean runs) |
+| Frontend | **56 passed** |
+| Ablation table | reproduces exactly: recall@10 0.980, nDCG@10 0.895, leak 0.000 |
+
+Still unverified, all needing infrastructure this machine does not have: SSO round trip
+(Keycloak, a real Entra tenant), SharePoint sync (a real Graph tenant), limits across two
+replicas (Redis + 2 API containers), the parser container, and the BYOC CI job.

@@ -290,27 +290,45 @@ class RebuildOrchestrator:
         return report
 
     async def promote(self, report: VerificationReport) -> None:
-        """One atomic ``_aliases`` call across every pool."""
+        """One atomic ``_aliases`` call across every pool.
+
+        Writes move to the new generation; reads span both until ``finish_drain``. The old
+        generation must keep serving because a reader learns the new generation fingerprint from
+        its own next refresh rather than at the instant the alias moves -- and every query
+        asserts that fingerprint as a term filter, so a reader holding the old one against an
+        alias that resolves only to the new index gets a valid, empty, unlogged result.
+        """
         if not report.passed:
             raise ValueError("refusing to promote a generation that failed verification")
         if self.previous_generation is None:
             await self.admin.point_aliases(generation=self.generation, pools=self.pools)
         else:
-            await self.admin.swap(
+            await self.admin.promote(
                 from_generation=self.previous_generation, to_generation=self.generation, pools=self.pools
             )
         self._advance(GenerationState.LIVE)
 
-    async def rollback(self) -> None:
-        """Put the previous generation back. The same single call, reversed.
+    async def finish_drain(self) -> None:
+        """Close the drain window: stop reading the previous generation.
 
-        This is why ``DRAINING`` exists and why nothing is deleted during it. A rollback that
-        required a rebuild would take hours, which in practice means nobody rolls back -- they
-        try to fix forward under pressure instead.
+        Called once every reader is known to carry the new fingerprint -- in practice, after the
+        principal cache TTL plus a margin. Calling it immediately after ``promote`` reintroduces
+        exactly the empty-result window that two-phase promotion exists to remove.
+        """
+        if self.previous_generation is None:
+            return
+        await self.admin.finish_drain(generation=self.previous_generation, pools=self.pools)
+
+    async def rollback(self) -> None:
+        """Put the previous generation back. One call, and cheap.
+
+        Cheap precisely because the old generation never stopped being readable during the drain:
+        only the write alias moves back. A rollback that required a rebuild would take hours,
+        which in practice means nobody rolls back -- they try to fix forward under pressure.
         """
         if self.previous_generation is None:
             raise ValueError("there is no previous generation to roll back to")
-        await self.admin.swap(from_generation=self.generation, to_generation=self.previous_generation, pools=self.pools)
+        await self.admin.rollback(live_generation=self.generation, back_to=self.previous_generation, pools=self.pools)
         self._advance(GenerationState.DRAINING)
 
     async def retire_previous(self) -> None:

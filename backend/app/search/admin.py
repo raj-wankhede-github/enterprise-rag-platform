@@ -16,7 +16,9 @@ from app.search.generations import (
     alias_add_actions,
     chunk_index_name,
     parent_index_name,
-    swap_actions,
+    promote_actions,
+    retire_read_actions,
+    rollback_actions,
 )
 from app.search.mappings import chunk_index_body, parent_index_body
 
@@ -92,19 +94,38 @@ class IndexAdmin:
             actions.extend(alias_add_actions(generation=generation, pool=pool))
         await self.client.indices.update_aliases(body={"actions": actions})
 
-    async def swap(self, *, from_generation: int, to_generation: int, pools: list[int]) -> None:
-        """Promote a generation across every pool in ONE request.
+    async def promote(self, *, from_generation: int, to_generation: int, pools: list[int]) -> None:
+        """Phase one of a swap, across every pool, in ONE request.
 
         The atomicity is the entire point. A per-pool loop leaves the cluster serving a mixture
         of generations for as long as the loop runs, and a failure halfway through leaves it
         that way permanently -- with no error that names the problem, because each individual
         call succeeded.
+
+        Writes move to the new generation; reads now span **both**. See ``promote_actions`` for
+        why the old generation must keep serving until the drain window closes.
         """
         actions: list[AliasAction] = []
         for pool in pools:
-            actions.extend(swap_actions(from_generation=from_generation, to_generation=to_generation, pool=pool))
+            actions.extend(promote_actions(from_generation=from_generation, to_generation=to_generation, pool=pool))
         await self.client.indices.update_aliases(body={"actions": actions})
-        logger.info("alias swap complete", extra={"from": from_generation, "to": to_generation, "pools": len(pools)})
+        logger.info("alias promote complete", extra={"from": from_generation, "to": to_generation, "pools": len(pools)})
+
+    async def finish_drain(self, *, generation: int, pools: list[int]) -> None:
+        """Phase two: stop reading the retired generation. One request, every pool."""
+        actions: list[AliasAction] = []
+        for pool in pools:
+            actions.extend(retire_read_actions(generation=generation, pool=pool))
+        await self.client.indices.update_aliases(body={"actions": actions})
+        logger.info("read alias narrowed", extra={"retired": generation, "pools": len(pools)})
+
+    async def rollback(self, *, live_generation: int, back_to: int, pools: list[int]) -> None:
+        """Undo a promotion during the drain window. One request, every pool."""
+        actions: list[AliasAction] = []
+        for pool in pools:
+            actions.extend(rollback_actions(live_generation=live_generation, back_to=back_to, pool=pool))
+        await self.client.indices.update_aliases(body={"actions": actions})
+        logger.info("rolled back", extra={"from": live_generation, "to": back_to, "pools": len(pools)})
 
     async def drop_generation(self, *, generation: int, pools: list[int]) -> None:
         """Delete a retired generation. Only ever called after the drain window."""

@@ -26,7 +26,8 @@ from app.search.generations import (
     chunk_read_alias,
     compute_fingerprint,
     pool_for_tenant,
-    swap_actions,
+    promote_actions,
+    retire_read_actions,
 )
 from app.search.mappings import (
     analysis_digest,
@@ -248,14 +249,32 @@ def test_chunk_document_id_is_deterministic_and_version_scoped() -> None:
     assert first != chunk_document_id(tenant_id=TENANT, doc_version_id=version, ordinal=5)
 
 
-def test_swap_actions_move_read_and_write_aliases_together() -> None:
-    actions = swap_actions(from_generation=7, to_generation=8, pool=0)
+def test_a_promotion_moves_writes_and_widens_reads() -> None:
+    """Writes move wholesale; reads gain the new generation without losing the old one.
+
+    The asymmetry is the fix for a bug the continuous-traffic integration test caught. Every
+    query asserts a ``generation_fingerprint`` term filter, and a reader learns the new
+    fingerprint from its own next refresh rather than when the alias moves -- so an alias that
+    resolved only to the new index would answer a still-old reader with a valid, empty,
+    unlogged result.
+    """
+    actions = promote_actions(from_generation=7, to_generation=8, pool=0)
     adds = [a["add"] for a in actions if "add" in a]
     removes = [a["remove"] for a in actions if "remove" in a]
-    assert all(a["index"] == "chunks_g8_p000" for a in adds if "chunks" in str(a["index"]))
-    assert all(r["index"] == "chunks_g7_p000" for r in removes if "chunks" in str(r["index"]))
+
+    assert all(a["index"].endswith("_g8_p000") for a in adds)
+    # Only write aliases are removed at promotion time.
+    assert all("_write_" in str(r["alias"]) for r in removes)
+
     write_adds = [a for a in adds if a.get("is_write_index")]
     assert len(write_adds) == 2, "one write alias for chunks and one for parents"
+
+
+def test_the_old_generation_leaves_the_read_alias_only_when_the_drain_closes() -> None:
+    actions = retire_read_actions(generation=7, pool=0)
+    assert all("remove" in a for a in actions)
+    assert all("_read_" in str(a["remove"]["alias"]) for a in actions)
+    assert {str(a["remove"]["index"]) for a in actions} == {"chunks_g7_p000", "parents_g7_p000"}
 
 
 # --------------------------------------------------------------------------------------------

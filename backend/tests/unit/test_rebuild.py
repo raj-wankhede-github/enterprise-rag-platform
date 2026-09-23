@@ -22,7 +22,10 @@ from app.search.generations import (
     chunk_read_alias,
     chunk_write_alias,
     parent_index_name,
-    swap_actions,
+    parent_read_alias,
+    promote_actions,
+    retire_read_actions,
+    rollback_actions,
 )
 from app.search.rebuild import BackfillBatch, RebuildOrchestrator, VerificationReport, compare_metrics
 
@@ -391,25 +394,60 @@ async def test_every_pool_swaps_in_exactly_one_aliases_call() -> None:
     await runner.promote(report)
 
     assert len(client.indices.alias_calls) == 1
-    assert len(client.indices.alias_calls[0]) == 4 * 8
+    # Six actions per pool: two write removes, two write adds, two read adds. The old
+    # generation's read entries stay until finish_drain.
+    assert len(client.indices.alias_calls[0]) == 4 * 6
     assert runner.state is GenerationState.LIVE
 
 
 def test_removes_precede_adds_so_two_indices_never_claim_the_write_alias() -> None:
     """OpenSearch rejects a request that would leave an alias with two write indices, and the
     actions inside one request apply in order."""
-    actions = swap_actions(from_generation=1, to_generation=2, pool=0)
+    actions = promote_actions(from_generation=1, to_generation=2, pool=0)
     write_alias_ops = [
         next(iter(action)) for action in actions if next(iter(action.values()))["alias"] == chunk_write_alias(0)
     ]
     assert write_alias_ops == ["remove", "add"]
 
 
-def test_exactly_one_index_claims_each_write_alias_after_a_swap() -> None:
-    actions = swap_actions(from_generation=1, to_generation=2, pool=0)
+def test_exactly_one_index_claims_each_write_alias_after_a_promotion() -> None:
+    actions = promote_actions(from_generation=1, to_generation=2, pool=0)
     writes = [action["add"] for action in actions if "add" in action and action["add"].get("is_write_index")]
     assert len(writes) == 2
     assert {str(entry["index"]) for entry in writes} == {"chunks_g2_p000", "parents_g2_p000"}
+
+
+def test_a_promotion_widens_the_read_alias_rather_than_moving_it() -> None:
+    """The fix for a bug the integration test caught under continuous traffic.
+
+    Every query asserts a ``generation_fingerprint`` term filter, and a reader learns the new
+    fingerprint from its own next refresh -- not at the instant the alias moves. Moving the read
+    alias wholesale leaves a window where a reader holding the old fingerprint queries an alias
+    resolving only to the new index: valid, HTTP 200, zero hits, nothing logged. Reversing the
+    order just moves the window to the other side.
+    """
+    actions = promote_actions(from_generation=1, to_generation=2, pool=0)
+    read_ops = [
+        (next(iter(action)), next(iter(action.values()))["index"])
+        for action in actions
+        if next(iter(action.values()))["alias"] in {chunk_read_alias(0), parent_read_alias(0)}
+    ]
+    assert all(op == "add" for op, _ in read_ops), "the old generation must keep serving reads"
+    assert {index for _, index in read_ops} == {"chunks_g2_p000", "parents_g2_p000"}
+
+
+def test_the_old_generation_leaves_the_read_alias_only_at_the_end_of_the_drain() -> None:
+    actions = retire_read_actions(generation=1, pool=0)
+    assert all("remove" in action for action in actions)
+    assert {str(action["remove"]["index"]) for action in actions} == {"chunks_g1_p000", "parents_g1_p000"}
+
+
+def test_a_rollback_moves_only_the_write_alias_back() -> None:
+    """Cheap precisely because the old generation never stopped being readable."""
+    actions = rollback_actions(live_generation=2, back_to=1, pool=0)
+    restored = [action["add"] for action in actions if "add" in action]
+    assert all(entry.get("is_write_index") for entry in restored)
+    assert {str(entry["index"]) for entry in restored} == {"chunks_g1_p000", "parents_g1_p000"}
 
 
 def test_a_bootstrap_points_the_read_alias_without_removing_anything() -> None:
@@ -455,6 +493,9 @@ async def test_a_rollback_is_one_call_with_the_generations_reversed() -> None:
     assert len(client.indices.alias_calls) == 2
     reverted = [action for action in client.indices.alias_calls[1] if "add" in action]
     assert all("_g1_" in str(action["add"]["index"]) for action in reverted)
+    assert all(action["add"].get("is_write_index") for action in reverted), (
+        "only the write alias needs moving back; the old generation never stopped serving reads"
+    )
     assert runner.state is GenerationState.DRAINING
 
 
