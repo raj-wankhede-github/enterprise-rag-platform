@@ -17,7 +17,7 @@ containers, which is what lets a test build an app with injected fakes beside a 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import Any
 
@@ -54,32 +54,49 @@ class Container:
 
 
 def build_embedder(settings: Settings) -> Embedder:
-    """Currently always the hashing embedder.
+    """The synchronous path: always the hashing embedder.
 
-    **A real embedder is not yet implemented.** The ``models`` container serves ``/rerank`` and
-    nothing else, so there is no ``/embed`` endpoint and no client for one. Setting
-    ``EMBEDDING_PROVIDER=onnx`` is accepted and logged, and you still get hashing.
+    A real embedder must be *probed* before it can be used -- its id and dimension are properties
+    of the deployed artefact, not of our configuration, and both enter the generation
+    fingerprint. That probe is a network call, so it cannot happen here.
 
-    That is stated loudly rather than failing, because the rest of the system is complete and
-    testable without it, and because the alternative -- a deployment that will not boot -- helps
-    nobody. It is also stated loudly rather than silently, because a deployment unknowingly
-    running hashing embeddings is the worst kind of production problem: retrieval works, BM25
-    carries it, relevance is quietly poor, and nothing looks broken.
-
-    The generation fingerprint includes the embedder id, so hashing-embedded and
-    properly-embedded chunks can never blend in one index -- whichever is running, the index is
-    internally consistent.
+    ``resolve_embedder`` is the async counterpart, and is what the API and worker call at
+    startup. This one exists for the offline path, for CI, and for anything that needs a
+    container without a network.
     """
-    provider = str(getattr(settings, "embedding_provider", "hashing")).lower()
-    if provider != "hashing":
-        logger.warning(
-            "embedder.not_implemented",
-            extra={"requested": provider, "using": "hashing", "detail": "the models service exposes no /embed route"},
-        )
-
     from app.embeddings.hashing import HashingEmbedder
 
     return HashingEmbedder(dimension=int(getattr(settings, "embedding_dimension", 384)))
+
+
+async def resolve_embedder(settings: Settings) -> Embedder:
+    """The real embedder, discovered from the models service.
+
+    **Raises rather than falling back.** Every other remote dependency here degrades -- a
+    reranker timeout drops to fusion order, an LLM outage drops to the template. Falling back
+    here would write vectors from a different vector space into the same index, and nothing
+    downstream could tell: similarity between a hashed vector and a bge vector is meaningless,
+    the dense leg returns plausible nonsense for those documents, and no error appears anywhere.
+
+    A slow ingest is recoverable. A poisoned index is a rebuild.
+
+    A deployment that genuinely wants hashing asks for it by name, and gets it without a warning
+    because it was a choice.
+    """
+    provider = str(getattr(settings, "embedding_provider", "hashing")).lower()
+    if provider == "hashing":
+        return build_embedder(settings)
+
+    url = getattr(settings, "models_service_url", None)
+    if not url:
+        raise ValueError(
+            f"EMBEDDING_PROVIDER={provider} needs MODELS_SERVICE_URL. Set it, or set "
+            "EMBEDDING_PROVIDER=hashing to run without a model service."
+        )
+
+    from app.embeddings.onnx_client import build_onnx_embedder
+
+    return await build_onnx_embedder(str(url))
 
 
 def build_contextualizer(settings: Settings) -> Contextualizer:
@@ -113,7 +130,25 @@ def build_container(settings: Settings) -> Container:
     )
 
 
+async def build_container_async(settings: Settings) -> Container:
+    """The container an API or worker process builds at startup.
+
+    Differs from the sync one in exactly one way: the embedder is resolved against the running
+    models service rather than assumed. Everything else is identical, so a test that uses the
+    sync container is testing the same wiring.
+    """
+    container = build_container(settings)
+    embedder = await resolve_embedder(settings)
+    if embedder.id == container.embedder.id:
+        return container
+
+    resolved = replace(container, embedder=embedder)
+    logger.info("container.embedder_resolved", extra={"id": embedder.id, "dimension": embedder.dimension})
+    return resolved
+
+
 def build_ingestion_pipeline(settings: Settings) -> IngestionPipeline:
+    """The offline pipeline. Workers use ``build_container_async`` and pass the result in."""
     return build_container(settings).pipeline()
 
 

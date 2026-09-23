@@ -141,6 +141,40 @@ uploader's role; the only role-sensitive parts are that 409 and the visibility c
 `embedding_cache` is keyed on `(model_id, content_sha256)` — and `chunk_vectors` persists fp16
 vectors so a generation rebuild re-embeds nothing.
 
+## Embeddings
+
+- **The embedder id and dimension are read FROM the models service, never configured.** Both
+  enter the generation fingerprint, so they must describe what actually produced the vectors; a
+  replica running an older image would otherwise stamp a plausible label onto a different
+  checkpoint's output and the fingerprint would be lying. `build_container_async` resolves it at
+  startup, which is why that factory is async.
+- **The embedding client does NOT degrade.** Everything else here falls back -- a reranker
+  timeout drops to fusion order, an LLM outage to the template. Falling back here writes a second
+  vector space into one index, where similarity is meaningless and nothing downstream can tell.
+  An outage raises, the job retries, the index stays consistent. A slow ingest is recoverable; a
+  poisoned index is a rebuild. **A mid-run change of embedder id is fatal** for the same reason.
+- **Pooling and query prefixes come from `embedding_card.json`, baked beside the weights.** BGE
+  uses CLS pooling, E5 uses mean; BGE prefixes queries only, E5 prefixes both. Getting either
+  wrong does not error -- it silently costs several points of recall.
+- **Mean pooling must exclude padding**, or the same text embedded in two differently-shaped
+  batches gets two different vectors and the index is inconsistent with itself.
+  `tests/unit/test_models_pooling.py` is the guard.
+- The server normalizes, not the client: the mapping uses `innerproduct`, which equals cosine
+  only on unit vectors.
+
+## Ingestion at volume
+
+- **The queue is Postgres, `FOR UPDATE SKIP LOCKED`, because enqueue commits in the same
+  transaction as the business row.** No window where a document exists with no job.
+- **The claim re-checks `status = 'QUEUED'` in the UPDATE's own WHERE, not only in the CTE.**
+  Under READ COMMITTED, EvalPlanQual re-evaluates the quals of the *locking* query; a predicate
+  inside a CTE is not re-checked. Without that line, 8 workers completed 420 of 400 jobs.
+- **Fairness is in the claim query**, counting running jobs and this batch's position per tenant.
+  One tenant's 200k backfill starving everyone else is the commonest multi-tenant ingestion
+  failure.
+- A lease, not a lock: a killed worker's document returns to the queue with its attempt count
+  intact, so a poison message still reaches `DEAD` rather than cycling forever.
+
 ## Auth, keys and limits
 
 - **Identity is matched on the IdP's immutable subject, never email.** Entra's `oid` before

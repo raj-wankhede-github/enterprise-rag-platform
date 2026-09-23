@@ -35,6 +35,10 @@ dev = [
     "aiosqlite>=0.21",
     "ruff>=0.14",
     "mypy>=1.18",
+    # Dev-only, and never in the runtime image. It exists so the models service's pooling can be
+    # tested from here: mean pooling that includes padding produces vectors that depend on batch
+    # composition, which is a silent, expensive bug and the one most worth a test.
+    "numpy>=2.1",
 ]
 
 [build-system]

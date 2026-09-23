@@ -509,3 +509,48 @@ Verified across four consecutive full runs of the suite.
 Still unverified, all needing infrastructure this machine does not have: SSO round trip
 (Keycloak, a real Entra tenant), SharePoint sync (a real Graph tenant), limits across two
 replicas (Redis + 2 API containers), the parser container, and the BYOC CI job.
+
+
+## The embedder, built
+
+The dense leg was running on the hashing embedder, which has no semantic understanding at all --
+it matches paraphrases only by shared vocabulary. BM25 and the exact leg were carrying more than
+they should, and the ablation table's dense rows were measuring the plumbing rather than
+embedding quality.
+
+Built: an `/embed` route on the models container (which already loads ONNX models for
+reranking), a bi-encoder baked in at image build time, and a client.
+
+### Decisions worth keeping
+
+**Two models, one container.** A cross-encoder scores a (query, passage) *pair* and has no
+per-text vector to extract; a bi-encoder embeds one text and never sees the query alongside the
+passage. They share a runtime, a warmup path and an artefact to ship into an air-gapped
+registry -- not weights.
+
+**`embedding_card.json` is baked beside the weights** and records pooling mode, query prefix,
+passage prefix and dimension. These are properties of the *checkpoint*: BGE uses CLS pooling and
+prefixes queries only; E5 uses mean pooling and prefixes both. A server that hard-coded them
+would silently produce bad vectors the day someone changed `EMBEDDING_MODEL` -- and "silently"
+is the operative word, because none of these mistakes error.
+
+**Mean pooling excludes padding.** Including it makes a vector depend on batch composition, so
+the same text embedded alongside different neighbours gets different vectors and the index is
+inconsistent with itself. `test_models_pooling.py` holds this.
+
+**The server normalizes, not the client.** The mapping uses `space_type: innerproduct`, which
+equals cosine only on unit vectors -- a client that forgot would get silently wrong rankings
+rather than an error.
+
+**The embedder id comes from the service, never from configuration.** It enters the generation
+fingerprint, so it has to describe what actually produced the vectors. `build_container_async`
+probes at startup, which is why that factory is async; a replica running an older image would
+otherwise stamp a plausible label onto a different checkpoint's output.
+
+**The client does not degrade, and that is the point.** Every other remote dependency here falls
+back. Falling back to hashing would write a second vector space into one index, where similarity
+scores are meaningless and nothing downstream could tell. An outage raises, the job retries with
+backoff, the index stays consistent. A mid-run change of embedder id is fatal for the same
+reason: it means a rollout is live with two versions serving.
+
+44 new tests -- 18 client, 14 route, 12 pooling.
